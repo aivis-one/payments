@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from app.domain.events import TxidAdmission
+import pytest
+
+from app.domain.events import ConfirmationsObserved, TxidAdmission
 from app.domain.statuses import InvoiceStatus
-from app.domain.transitions import decide
-from tests.conftest import EXPIRES_AT, NOW, POLICY_6, snapshot
+from app.domain.transitions import NO_EFFECTS, Decision, decide
+from tests.conftest import ACTIVE_TXID, EXPIRES_AT, NOW, POLICY_6, snapshot
 
 ADMISSION = TxidAdmission(txid="0xabc")
 
@@ -134,3 +136,122 @@ def test_no_admission_ever_spends_an_attempt_or_writes_a_row():
 def test_admission_is_total_over_all_six_statuses():
     for status in InvoiceStatus:
         decide(snapshot(status), ADMISSION, NOW, POLICY_6)
+
+
+# --------------------------------------------------------------------------
+# Idempotent replay: the same TXID submitted again while it holds the slot.
+#
+# The pair matters more than either half. "The owner's own TXID is not refused"
+# would pass just as well against a guard broken open for everything, so it is
+# always read next to "a foreign TXID is still refused".
+# --------------------------------------------------------------------------
+
+
+def test_own_txid_while_it_holds_the_slot_is_not_refused():
+    """Refusing would be answered as slot_occupied, which asserts "another TXID"."""
+    decision = decide(
+        snapshot(InvoiceStatus.AWAITING_CONFIRMATIONS),
+        TxidAdmission(txid=ACTIVE_TXID),
+        NOW,
+        POLICY_6,
+    )
+
+    assert decision.accepted
+    assert decision.refused_by is None
+    assert decision.idempotent_replay is True
+    assert decision.next_status is InvoiceStatus.AWAITING_CONFIRMATIONS
+
+
+def test_foreign_txid_against_an_occupied_slot_is_still_refused():
+    """The other half of the pair: the guard did not open for everything."""
+    decision = decide(
+        snapshot(InvoiceStatus.AWAITING_CONFIRMATIONS),
+        TxidAdmission(txid="0xsomeoneelse"),
+        NOW,
+        POLICY_6,
+    )
+
+    assert not decision.accepted
+    assert decision.refused_by is InvoiceStatus.AWAITING_CONFIRMATIONS
+    assert decision.idempotent_replay is False
+
+
+def test_replay_costs_nothing_and_persists_nothing():
+    decision = decide(
+        snapshot(InvoiceStatus.AWAITING_CONFIRMATIONS, attempts_used=1),
+        TxidAdmission(txid=ACTIVE_TXID),
+        NOW,
+        POLICY_6,
+    )
+
+    assert decision.effects == NO_EFFECTS
+    assert decision.attempt_record is None
+
+
+def test_own_txid_after_the_observation_window_is_refused_as_stalled():
+    """The time resolve runs first, and stalled is never reopened.
+
+    "But it is my own TXID" is not one of the conditions under which the
+    service reopens a stalled invoice, because there are none.
+    """
+    decision = decide(
+        snapshot(InvoiceStatus.AWAITING_CONFIRMATIONS, slot_frozen_at=NOW - timedelta(days=8)),
+        TxidAdmission(txid=ACTIVE_TXID),
+        NOW,
+        POLICY_6,
+    )
+
+    assert decision.refused_by is InvoiceStatus.STALLED
+    assert decision.idempotent_replay is False
+
+
+def test_own_txid_on_a_confirmed_invoice_is_still_refused():
+    """Only slot_occupied would have lied; invoice_already_confirmed does not.
+
+    The invoice really is confirmed, so refusing states a true fact about it
+    and no replay cell is needed for this status.
+    """
+    decision = decide(
+        snapshot(InvoiceStatus.CONFIRMED, active_txid=ACTIVE_TXID),
+        TxidAdmission(txid=ACTIVE_TXID),
+        NOW,
+        POLICY_6,
+    )
+
+    assert decision.refused_by is InvoiceStatus.CONFIRMED
+    assert decision.idempotent_replay is False
+
+
+def test_admission_stays_total_with_the_replay_cell_in_place():
+    for status in InvoiceStatus:
+        for txid in (ACTIVE_TXID, "0xforeign", ""):
+            decide(snapshot(status), TxidAdmission(txid=txid), NOW, POLICY_6)
+
+
+def test_waiting_for_confirmations_is_not_reported_as_a_replay():
+    """The shape the flag exists for: same status, same acceptance, other meaning.
+
+    An observation below the threshold returns accepted with next_status
+    awaiting_confirmations too. If replay were derived from that combination
+    instead of carried explicitly, this decision would be misread as a replay.
+    """
+    decision = decide(
+        snapshot(InvoiceStatus.AWAITING_CONFIRMATIONS),
+        ConfirmationsObserved(confirmations=1, raw_amount=100_000_000),
+        NOW,
+        POLICY_6,
+    )
+
+    assert decision.accepted
+    assert decision.next_status is InvoiceStatus.AWAITING_CONFIRMATIONS
+    assert decision.idempotent_replay is False
+
+
+def test_a_refusal_cannot_also_be_a_replay():
+    """Locked in the constructor: two fields able to disagree, kept from doing so."""
+    with pytest.raises(ValueError, match="idempotent replay"):
+        Decision(
+            next_status=InvoiceStatus.AWAITING_CONFIRMATIONS,
+            refused_by=InvoiceStatus.AWAITING_CONFIRMATIONS,
+            idempotent_replay=True,
+        )

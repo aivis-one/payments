@@ -90,6 +90,7 @@ class InvoiceSnapshot:
     attempts_used: int
     expires_at: datetime
     slot_frozen_at: datetime | None = None
+    active_txid: str | None = None
 
     def __post_init__(self) -> None:
         require_aware(self.expires_at, "expires_at")
@@ -102,6 +103,14 @@ class InvoiceSnapshot:
         # function free of a fallback branch for a row that cannot exist.
         if self.status is InvoiceStatus.AWAITING_CONFIRMATIONS and self.slot_frozen_at is None:
             raise ValueError("awaiting_confirmations requires slot_frozen_at")
+        # Paired with the above: the same transition on a matched verdict sets
+        # slot_frozen_at and active_txid together, so one without the other
+        # cannot be a real row. Without this guard such a snapshot would
+        # silently refuse the owner of the slot -- None never equals a txid --
+        # and an effect the caller failed to persist would look like ordinary
+        # operation instead of the bug it is.
+        if self.status is InvoiceStatus.AWAITING_CONFIRMATIONS and self.active_txid is None:
+            raise ValueError("awaiting_confirmations requires active_txid")
 
     # No lower bound on invoice_amount_cents by design. There is no CHECK
     # constraint on the column either (T-03 fence), so zero is genuinely

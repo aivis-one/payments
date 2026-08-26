@@ -118,6 +118,24 @@ def test_awaiting_confirmations_without_a_frozen_slot_cannot_be_built():
         )
 
 
+def test_awaiting_confirmations_without_an_active_txid_cannot_be_built():
+    """Paired with the one above: matched sets both fields in one transition.
+
+    Without this guard the snapshot would quietly refuse the owner of the slot
+    -- None never equals a txid -- so an effect the caller failed to persist
+    would look like ordinary operation instead of a bug.
+    """
+    with pytest.raises(ValueError, match="active_txid"):
+        InvoiceSnapshot(
+            status=InvoiceStatus.AWAITING_CONFIRMATIONS,
+            invoice_amount_cents=1,
+            attempts_used=0,
+            expires_at=EXPIRES_AT,
+            slot_frozen_at=NOW,
+            active_txid=None,
+        )
+
+
 def test_every_status_answers_every_event():
     """Totality across the whole surface: six statuses times four events."""
     from app.domain.events import ConfirmationsObserved, TxidVerdict

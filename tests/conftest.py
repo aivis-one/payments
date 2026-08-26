@@ -43,6 +43,12 @@ POLICY_18 = Policy(
 )
 
 
+#: The TXID holding the slot in every awaiting_confirmations snapshot built by
+#: the helper below. Deliberately unlike any TXID the tests submit, so that a
+#: test asking about a *foreign* TXID does not accidentally match the slot.
+ACTIVE_TXID = "0x" + "f" * 64
+
+
 def snapshot(
     status: InvoiceStatus,
     *,
@@ -50,16 +56,25 @@ def snapshot(
     attempts_used: int = 0,
     expires_at: datetime = EXPIRES_AT,
     slot_frozen_at: datetime | None = None,
+    active_txid: str | None = None,
 ) -> InvoiceSnapshot:
-    """Build a snapshot, defaulting slot_frozen_at where the invariant needs it."""
-    if slot_frozen_at is None and status is InvoiceStatus.AWAITING_CONFIRMATIONS:
-        slot_frozen_at = NOW - timedelta(minutes=5)
+    """Build a snapshot, defaulting the fields the awaiting invariants require.
+
+    ``slot_frozen_at`` and ``active_txid`` are filled together because the
+    transition that sets one sets the other.
+    """
+    if status is InvoiceStatus.AWAITING_CONFIRMATIONS:
+        if slot_frozen_at is None:
+            slot_frozen_at = NOW - timedelta(minutes=5)
+        if active_txid is None:
+            active_txid = ACTIVE_TXID
     return InvoiceSnapshot(
         status=status,
         invoice_amount_cents=invoice_amount_cents,
         attempts_used=attempts_used,
         expires_at=expires_at,
         slot_frozen_at=slot_frozen_at,
+        active_txid=active_txid,
     )
 
 

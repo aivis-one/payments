@@ -20,6 +20,10 @@ Two conventions that H3 must not re-implement:
   nothing" loses the resolve: the invoice stays ``created`` past its TTL until
   something else touches it, and the product never receives the ``expired``
   event of TOR section 8. Persist ``next_status`` on refusals too.
+* ``Decision.idempotent_replay`` is the answer to "is this the same submission
+  again". The caller must not reach for ``active_txid`` to work that out: the
+  rule for what counts as the same submission belongs here, or the invoice
+  status ends up with two sources of truth again.
 """
 
 from __future__ import annotations
@@ -81,12 +85,29 @@ class Decision:
 
     There is no ``status_changed`` flag: it is ``next_status != current``, and a
     second field carrying a derived truth is a second place to get it wrong.
+
+    ``idempotent_replay`` is a field rather than something the caller derives,
+    because it cannot be derived. The combination "accepted, next status
+    awaiting_confirmations" is already taken: that is what an observation below
+    the confirmation threshold returns, meaning "keep waiting". Overloading it
+    would make one shape mean two things across different events. The
+    comparison behind the flag -- is this the very TXID that holds the slot --
+    is a domain rule about what counts as the same submission, and it lives
+    here so that H3 never reads ``active_txid`` itself.
     """
 
     next_status: InvoiceStatus
     refused_by: InvoiceStatus | None = None
     effects: Effects = NO_EFFECTS
     attempt_record: AttemptResultCode | None = None
+    idempotent_replay: bool = False
+
+    def __post_init__(self) -> None:
+        # Two fields able to disagree are locked at construction, the same way
+        # InvoiceSnapshot locks its own invariants. A replay is by definition
+        # not a refusal: the caller answers it with the winner's result.
+        if self.refused_by is not None and self.idempotent_replay:
+            raise ValueError("a refusal cannot also be an idempotent replay")
 
     @property
     def accepted(self) -> bool:
@@ -105,7 +126,7 @@ def decide(
 
     match event:
         case TxidAdmission():
-            return _on_admission(snapshot, now, policy)
+            return _on_admission(snapshot, event, now, policy)
         case TxidVerdict():
             return _on_verdict(snapshot, event, now, policy)
         case ConfirmationsObserved():
@@ -156,13 +177,37 @@ def _resolve_by_time(snapshot: InvoiceSnapshot, now: datetime, policy: Policy) -
             assert_never(snapshot.status)
 
 
-def _on_admission(snapshot: InvoiceSnapshot, now: datetime, policy: Policy) -> Decision:
+def _on_admission(
+    snapshot: InvoiceSnapshot,
+    event: TxidAdmission,
+    now: datetime,
+    policy: Policy,
+) -> Decision:
     """Table 1: a TXID arrives, before format check and before the explorer.
 
     No attempt is ever spent here -- refused calls never reach the explorer, so
     there is physically nothing to charge for.
     """
     resolved = _resolve_by_time(snapshot, now, policy)
+
+    if resolved is InvoiceStatus.AWAITING_CONFIRMATIONS and event.txid == snapshot.active_txid:
+        # The slot is held by this very TXID: the user is submitting again what
+        # was already accepted, typically after waiting out a slow response.
+        #
+        # Refusing here would be answered by H3 with slot_occupied, and that
+        # code asserts the slot is held by *another* TXID -- of the five
+        # refusal codes it is the only one that would be false about the
+        # owner's own submission. The other four say nothing about whose TXID
+        # it is and stay true, which is why this cell exists for exactly one
+        # status.
+        #
+        # Deliberately placed after the time resolve: an invoice whose
+        # observation window has elapsed resolves to stalled and is refused
+        # even to the owner of the slot. The service never reopens a stalled
+        # invoice under any condition, and "but it is my own TXID" is not a
+        # condition.
+        return Decision(next_status=resolved, idempotent_replay=True)
+
     if resolved is not InvoiceStatus.CREATED:
         # Covers the five non-accepting statuses and the two lazy resolves
         # (created -> expired, awaiting_confirmations -> stalled). When both a
@@ -196,11 +241,25 @@ def _on_verdict(
     would throw away a payment that has just been found on-chain. Same
     precedence as the confirmed/stalled tie-break below: a payment found in the
     network beats an expired timer.
+
+    All six statuses are answered, including the five that only ever produce a
+    refusal. Their source of reachability is this function's own input:
+    ``InvoiceSnapshot`` declares ``status: InvoiceStatus``, six values, and a
+    test reaches every one of them by handing over a snapshot. No caller is
+    needed for that, and callers change while the domain of definition does
+    not. That is a different thing from a branch whose only route in was an
+    undecided design question -- once the question is decided the other way,
+    the source of reachability is gone and the branch is not written. Both
+    rules have the same shape: look at what can reach the state, not at who
+    happens to call today.
     """
     if snapshot.status is not InvoiceStatus.CREATED:
-        # A verdict arriving for a non-created invoice is a race that H3 closes
-        # by re-reading inside the transaction. The function answers it instead
-        # of raising.
+        # Under the recorded H3 contract the snapshot handed to this event is
+        # the one taken at admission, not a fresh read of the invoice row, and
+        # that row is not locked. Concurrency is arbitrated by the INSERT
+        # against the partial unique index: begin_nested, IntegrityError,
+        # re-read of the winning attempt row. The function answers this case
+        # anyway, because its domain is the six statuses.
         return Decision(next_status=snapshot.status, refused_by=snapshot.status)
 
     match event.verdict:
