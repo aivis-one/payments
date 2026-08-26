@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: payments
+          POSTGRES_PASSWORD: payments
+          POSTGRES_DB: payments
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://payments:payments@localhost:5432/payments
+      # Mandatory settings have no defaults; CI supplies throwaway values.
+      WALLET_ADDRESS_USDT_TRC20: TCiTestTronAddressForCiOnly000000000
+      WALLET_ADDRESS_USDT_ERC20: "0x0000000000000000000000000000000000000001"
+      WALLET_ADDRESS_USDT_BSC20: "0x0000000000000000000000000000000000000002"
+      ETHERSCAN_API_KEY: ci-not-a-real-key
+      # Turns "no database configured" from a silent skip into a failure, so a
+      # green run cannot mean the database tests quietly did not execute.
+      PAYMENTS_TESTS_REQUIRE_DB: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Migrate
+        run: alembic upgrade head
+
+      - name: Tests
+        run: pytest -q
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Types
+        run: mypy app
+
+      - name: Docker build
+        run: docker build -t payments:ci .
