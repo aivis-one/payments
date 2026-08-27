@@ -124,22 +124,39 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         yield s
 
 
-#: Test families that must reach no explorer, and therefore must carry
-#: ``pytestmark = pytest.mark.no_network``. Declared once, here: the trap below
-#: reads nothing from it, but the obligation test in
-#: ``tests/test_explorers_no_network.py`` walks it, so adding a family is one
+#: Test families that must reach no explorer, and therefore must carry one of
+#: the two markers below. Declared once, here, so that adding a family is one
 #: line rather than a second copy of the rule.
 NO_NETWORK_FAMILIES: tuple[str, ...] = ("test_explorers_*.py", "test_routes*.py")
+
+#: The two markers, weakest first.
+#:
+#: ``no_explorer`` is the invariant the work actually needs: nothing in this
+#: module may reach an explorer over HTTP. ``no_network`` adds "and nothing may
+#: open a socket at all", which is strictly stronger and only available to a
+#: module that does not use the database either.
+#:
+#: They were one marker until a module that legitimately talks to Postgres was
+#: given it. asyncpg connects through ``socket.connect``, so the stronger trap
+#: killed every database test in that file -- on the server, where the
+#: database exists, and nowhere earlier. One name for two properties is what
+#: made that possible; a module can hold the first and not the second.
+NETWORK_MARKERS: tuple[str, ...] = ("no_explorer", "no_network")
+
+#: Fixtures whose presence means the test genuinely needs a socket.
+DB_FIXTURES: frozenset[str] = frozenset({"session", "engine", "database_url"})
 
 
 @pytest.fixture(autouse=True)
 def network_attempts(request: pytest.FixtureRequest) -> Iterator[list[str]]:
-    """Arm a network trap for modules that declare ``pytest.mark.no_network``.
+    """Arm a network trap for modules that declare one of NETWORK_MARKERS.
 
     Opt-in rather than always on, and the reason is the database tests: asyncpg
     reaches Postgres through ``socket.connect``, so a trap armed across the whole
-    suite would kill every test in ``test_partial_index.py`` the moment
-    ``DATABASE_URL`` is configured. Those modules must keep the real socket.
+    suite would kill every test that uses one the moment ``DATABASE_URL`` is
+    configured. Those modules must keep the real socket, which is what
+    ``no_explorer`` gives them: the HTTP transports are still trapped, so an
+    explorer call is still impossible.
 
     Three paths are patched rather than one, because a single guard proves
     nothing: httpx's async transport is what the adapters use, the sync transport
@@ -154,9 +171,23 @@ def network_attempts(request: pytest.FixtureRequest) -> Iterator[list[str]]:
     suite does not pay for an import it has no use for.
     """
     attempts: list[str] = []
-    if request.node.get_closest_marker("no_network") is None:
+    marks = {mark.name for mark in request.node.iter_markers()}
+    declared = marks & set(NETWORK_MARKERS)
+    if not declared:
         yield attempts
         return
+
+    # The contradiction is refused loudly rather than resolved quietly. A test
+    # that asks for both "no socket may open" and a database connection cannot
+    # have what it asked for, and downgrading it silently would hand back a
+    # guarantee weaker than the one its marker claims.
+    needs_socket = DB_FIXTURES & set(request.fixturenames)
+    if "no_network" in marks and needs_socket:
+        pytest.fail(
+            "no_network forbids every socket, but this test uses "
+            f"{sorted(needs_socket)}, which reach the database over one. "
+            "Use no_explorer: it still forbids reaching an explorer."
+        )
 
     import socket
 
@@ -174,5 +205,6 @@ def network_attempts(request: pytest.FixtureRequest) -> Iterator[list[str]]:
             httpx.AsyncHTTPTransport, "handle_async_request", trap("httpx.AsyncHTTPTransport")
         )
         patch.setattr(httpx.HTTPTransport, "handle_request", trap("httpx.HTTPTransport"))
-        patch.setattr(socket.socket, "connect", trap("socket.connect"))
+        if "no_network" in marks:
+            patch.setattr(socket.socket, "connect", trap("socket.connect"))
         yield attempts

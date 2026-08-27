@@ -50,5 +50,6 @@ disallow_untyped_defs = false
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
-    "no_network: the module must reach no explorer; arms the transport trap",
+    "no_explorer: the module must reach no explorer; arms the HTTP transport trap",
+    "no_network: no_explorer, and no socket at all; not for modules using the database",
 ]

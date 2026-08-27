@@ -18,6 +18,7 @@ and every "no calls were made" assertion in this directory would still pass.
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import socket
 
@@ -26,7 +27,7 @@ import pytest
 
 from app.domain.statuses import Verdict
 from app.explorers.verify import verify_txid
-from tests.conftest import NO_NETWORK_FAMILIES
+from tests.conftest import DB_FIXTURES, NETWORK_MARKERS, NO_NETWORK_FAMILIES
 from tests.explorers_support import (
     EVM_TXID,
     EVM_WALLET,
@@ -186,33 +187,60 @@ TESTS_DIR = pathlib.Path(__file__).parent
 
 
 @pytest.mark.parametrize("family", NO_NETWORK_FAMILIES)
-def test_every_module_of_a_no_network_family_declares_the_marker(family: str):
+def test_every_module_of_a_no_network_family_declares_a_marker(family: str):
     """A directory could not be forgotten; a marker can.
 
     The trap is opt-in, so a module written without ``pytestmark`` would simply
     not be guarded -- and would pass, quietly, with the guarantee gone. That is
     what the flat layout costs, and this is where it is paid back.
 
-    Parametrised over the families declared in ``tests/conftest.py`` rather
-    than over a glob written here. H3 added a second family; hard-coding it
-    would have made the obligation two copies, and the first person to add a
-    third would have updated one of them.
+    Either marker satisfies it. Both forbid reaching an explorer, which is the
+    property these families are about; ``no_network`` merely forbids more.
     """
     modules = sorted(TESTS_DIR.glob(family))
 
     assert modules, f"the glob {family!r} matched nothing; the naming changed"
-    missing = [m.name for m in modules if "pytest.mark.no_network" not in m.read_text()]
+    missing = [
+        module.name
+        for module in modules
+        if not any(f"pytest.mark.{mark}" in module.read_text() for mark in NETWORK_MARKERS)
+    ]
     assert missing == []
 
 
-def test_the_database_tests_do_not_declare_the_marker():
-    """The paired half, and the reason the trap is opt-in at all.
+def test_no_module_that_uses_the_database_claims_the_socket_trap():
+    """The paired half -- and it closes the class this time, not one file.
 
-    asyncpg reaches Postgres through ``socket.connect``. If this module ever
-    picked up the marker, all nine index tests would fail the moment the owner
-    ran them against a real database -- and they skip on any machine without
-    one, so the breakage would arrive on the server and nowhere earlier.
+    The previous version named ``test_partial_index.py`` and checked that one
+    file. It passed while ``test_routes_db.py``, added in the same delivery,
+    carried ``no_network`` and could not possibly hold it: asyncpg reaches
+    Postgres through ``socket.connect``. Every database test in that file died
+    -- on the server, where the database exists, and nowhere earlier.
+
+    The runtime guard in ``tests/conftest.py`` catches the same contradiction,
+    but only when a database is configured: without ``DATABASE_URL`` the test
+    skips *before* the guard runs. Verified, not assumed. So this check reads
+    the source instead, and fails on any machine.
+
+    Parsed rather than grepped. A substring search for ``session`` matches
+    local variables and unrelated helpers -- ``test_routes.py`` has a stub
+    session of its own and holds the strong marker legitimately. What decides
+    the question is exactly what pytest uses: the parameter names of the test
+    functions themselves.
     """
-    source = (TESTS_DIR / "test_partial_index.py").read_text()
+    offenders = []
+    for module in sorted(TESTS_DIR.glob("test_*.py")):
+        source = module.read_text()
+        if "pytest.mark.no_network" not in source:
+            continue
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if not node.name.startswith("test_"):
+                continue
+            requested = {arg.arg for arg in node.args.args} & DB_FIXTURES
+            if requested:
+                offenders.append(f"{module.name}::{node.name} wants {sorted(requested)}")
 
-    assert "no_network" not in source
+    assert offenders == []

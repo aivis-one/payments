@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -37,7 +38,12 @@ from tests.explorers_support import (
     make_settings,
 )
 
-pytestmark = pytest.mark.no_network
+# ``no_explorer``, not ``no_network``: this module talks to Postgres, and
+# asyncpg gets there through ``socket.connect``. The invariant that matters
+# here is that no explorer is reached, and the HTTP transports are trapped
+# for that. Claiming the stronger marker would be claiming a property this
+# module cannot have.
+pytestmark = pytest.mark.no_explorer
 
 TOKEN = "test-token-not-real"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -130,12 +136,32 @@ async def test_a_matched_txid_takes_the_slot_and_writes_one_attempt(session: Asy
     assert invoice.slot_frozen_at is not None
 
 
-async def test_a_not_found_spends_an_attempt_and_leaves_the_invoice_open(session: AsyncSession):
-    """Four explorer calls, one row, one attempt: the retry series is exhausted."""
+async def test_a_not_found_runs_the_whole_series_then_spends_one_attempt(
+    session: AsyncSession,
+):
+    """The one place the retry series is exercised end to end through a route.
+
+    It really sleeps 1 + 2 + 4 seconds, because the route calls the loop with
+    its production delays and nothing here overrides them. That is the price of
+    the only test that proves the series is wired into the endpoint at all --
+    so the seven seconds are turned into evidence: four calls reached the
+    transport, and exactly one attempt was spent for all of them.
+
+    Every other test in this file that needs a spent attempt uses
+    ``wrong_address`` instead, which is terminal and returns at once.
+    """
     invoice = await make_invoice(session)
     misses = [json_response(load("etherscan_result_null")) for _ in range(4)]
+    transport = RecordingTransport(*misses)
+    explorer = httpx.AsyncClient(transport=transport)
+    settings = make_settings()
+    app.dependency_overrides[settings_dependency] = lambda: settings
+    app.dependency_overrides[get_session] = lambda: session
+    app.dependency_overrides[explorer_client] = lambda: explorer
 
-    async with client_for(session, *misses) as http:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as http:
         response = await http.post(
             f"/api/v1/invoices/{invoice.id}/txid", json={"txid": EVM_TXID}, headers=AUTH
         )
@@ -144,14 +170,20 @@ async def test_a_not_found_spends_an_attempt_and_leaves_the_invoice_open(session
     assert body["status"] == "created"
     assert body["result_code"] == "not_found"
     assert body["attempts_used"] == 1
+    assert transport.calls == 4
     assert await count_attempts(session, invoice.id) == 1
 
 
 async def test_the_last_attempt_closes_the_invoice(session: AsyncSession):
-    invoice = await make_invoice(session, attempts_used=2)
-    misses = [json_response(load("etherscan_result_null")) for _ in range(4)]
+    """``wrong_address``, not ``not_found``: this is about the budget, not the series.
 
-    async with client_for(session, *misses) as http:
+    Both spend an attempt. Only ``not_found`` is retried, so using it here
+    would add seven seconds of sleeping to a test that says nothing about
+    retrying.
+    """
+    invoice = await make_invoice(session, attempts_used=2)
+
+    async with client_for(session, json_response(load("etherscan_erc20_wrong_recipient"))) as http:
         response = await http.post(
             f"/api/v1/invoices/{invoice.id}/txid", json={"txid": EVM_TXID}, headers=AUTH
         )
@@ -168,6 +200,9 @@ async def test_a_foreign_token_transfer_is_not_found_and_still_costs_an_attempt(
 ):
     """The legacy bug, seen from the route rather than from the adapter."""
     invoice = await make_invoice(session)
+    # Four responses: a foreign token yields not_found, and not_found is the
+    # one verdict the series retries. This test keeps the real delays because
+    # the point is that a foreign token is refused all the way through.
     misses = [json_response(load("etherscan_erc20_foreign_only")) for _ in range(4)]
 
     async with client_for(session, *misses) as http:
@@ -289,23 +324,24 @@ async def test_a_rejected_insert_does_not_poison_the_transaction(session: AsyncS
     assert sorted(row.result_code for row in rows) == ["already_used", "matched"]
 
 
-async def test_two_not_found_rows_for_one_hash_are_allowed(session: AsyncSession):
+async def test_two_unmatched_rows_for_one_hash_are_allowed(session: AsyncSession):
     """The index is partial, and this is what that means in practice.
 
-    Only a *matched* row must be globally unique. The same wrong hash pasted
-    against two invoices is two ordinary rows, and treating that as a conflict
+    Only a *matched* row must be globally unique. The same hash landing twice
+    without matching is two ordinary rows, and treating that as a conflict
     would refuse a user for somebody else's typo.
     """
     first = await make_invoice(session)
     second = await make_invoice(session)
-    misses = [json_response(load("etherscan_result_null")) for _ in range(4)]
 
     for invoice in (first, second):
-        async with client_for(session, *misses) as http:
+        async with client_for(
+            session, json_response(load("etherscan_erc20_wrong_recipient"))
+        ) as http:
             response = await http.post(
                 f"/api/v1/invoices/{invoice.id}/txid", json={"txid": EVM_TXID}, headers=AUTH
             )
-        assert response.json()["result_code"] == "not_found"
+        assert response.json()["result_code"] == "wrong_address"
 
     assert await count_attempts(session, first.id) == 1
     assert await count_attempts(session, second.id) == 1
@@ -335,11 +371,27 @@ async def test_a_concurrent_duplicate_never_answers_500(
         invoice = await make_invoice(setup)
         invoice_id = invoice.id
 
+    # One override, handing out a *fresh* session per request -- which is what
+    # production does. The first attempt at this test called ``client_for``
+    # twice, and the second call overwrote the first's entry in the shared
+    # ``dependency_overrides`` dict: both coroutines ended up on one session and
+    # SQLAlchemy raised IllegalStateChangeError. That was the test racing
+    # itself, not the route racing anything.
+    async def fresh_session() -> AsyncIterator[AsyncSession]:
+        async with factory() as own:
+            yield own
+
+    settings = make_settings()
+    app.dependency_overrides[settings_dependency] = lambda: settings
+    app.dependency_overrides[get_session] = fresh_session
+    app.dependency_overrides[explorer_client] = lambda: httpx.AsyncClient(
+        transport=RecordingTransport(*[json_response(load("etherscan_erc20_single"))] * 8)
+    )
+
     async def submit() -> httpx.Response:
-        async with (
-            factory() as own,
-            client_for(own, json_response(load("etherscan_erc20_single"))) as http,
-        ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://t"
+        ) as http:
             return await http.post(
                 f"/api/v1/invoices/{invoice_id}/txid",
                 json={"txid": EVM_TXID},
