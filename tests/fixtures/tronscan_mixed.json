@@ -1,0 +1,79 @@
+{
+  "block": 49963474,
+  "hash": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+  "timestamp": 1680503190000,
+  "ownerAddress": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7",
+  "contractType": 31,
+  "confirmed": true,
+  "confirmations": 42,
+  "revert": false,
+  "contractRet": "SUCCESS",
+  "result": "SUCCESS",
+  "cost": {
+    "net_fee": 268000,
+    "energy_usage_total": 14650,
+    "fee": 268000
+  },
+  "trc20TransferInfo": [
+    {
+      "icon_url": "https://static.tronscan.org/x.png",
+      "symbol": "TUSD",
+      "level": "2",
+      "to_address": "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX",
+      "contract_address": "TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F4",
+      "type": "Transfer",
+      "decimals": 18,
+      "name": "Tether USD",
+      "vip": true,
+      "tokenType": "trc20",
+      "amount_str": "777000000",
+      "status": 0,
+      "from_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+    },
+    {
+      "icon_url": "https://static.tronscan.org/x.png",
+      "symbol": "USDT",
+      "level": "2",
+      "to_address": "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX",
+      "contract_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      "type": "Transfer",
+      "decimals": 6,
+      "name": "Tether USD",
+      "vip": true,
+      "tokenType": "trc20",
+      "amount_str": "25000000",
+      "status": 0,
+      "from_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+    },
+    {
+      "icon_url": "https://static.tronscan.org/x.png",
+      "symbol": "TUSD",
+      "level": "2",
+      "to_address": "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX",
+      "contract_address": "TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F4",
+      "type": "Transfer",
+      "decimals": 18,
+      "name": "Tether USD",
+      "vip": true,
+      "tokenType": "trc20",
+      "amount_str": "888000000",
+      "status": 0,
+      "from_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+    },
+    {
+      "icon_url": "https://static.tronscan.org/x.png",
+      "symbol": "USDT",
+      "level": "2",
+      "to_address": "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX",
+      "contract_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      "type": "Transfer",
+      "decimals": 6,
+      "name": "Tether USD",
+      "vip": true,
+      "tokenType": "trc20",
+      "amount_str": "75000000",
+      "status": 0,
+      "from_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+    }
+  ]
+}

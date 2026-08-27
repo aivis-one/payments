@@ -8,8 +8,9 @@ green run must not be able to mean "the database tests silently did not run".
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import (
@@ -121,3 +122,49 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         await s.execute(text("truncate invoice_txid_attempts, invoices cascade"))
         await s.commit()
         yield s
+
+
+@pytest.fixture(autouse=True)
+def network_attempts(request: pytest.FixtureRequest) -> Iterator[list[str]]:
+    """Arm a network trap for modules that declare ``pytest.mark.no_network``.
+
+    Opt-in rather than always on, and the reason is the database tests: asyncpg
+    reaches Postgres through ``socket.connect``, so a trap armed across the whole
+    suite would kill every test in ``test_partial_index.py`` the moment
+    ``DATABASE_URL`` is configured. Those modules must keep the real socket.
+
+    Three paths are patched rather than one, because a single guard proves
+    nothing: httpx's async transport is what the adapters use, the sync transport
+    is what a careless helper reaches for, and ``socket.connect`` catches
+    anything that bypasses httpx entirely.
+
+    Yields the list of attempts, which stays empty in a healthy run. Tests assert
+    on it directly -- an empty list is only evidence when it sits next to proof
+    that the mocked layer was exercised.
+
+    httpx is imported inside the armed branch so that a run of the pure-domain
+    suite does not pay for an import it has no use for.
+    """
+    attempts: list[str] = []
+    if request.node.get_closest_marker("no_network") is None:
+        yield attempts
+        return
+
+    import socket
+
+    import httpx
+
+    def trap(name: str) -> Any:
+        def _fail(*args: object, **kwargs: object) -> Any:
+            attempts.append(name)
+            raise AssertionError(f"outgoing network access attempted via {name}")
+
+        return _fail
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            httpx.AsyncHTTPTransport, "handle_async_request", trap("httpx.AsyncHTTPTransport")
+        )
+        patch.setattr(httpx.HTTPTransport, "handle_request", trap("httpx.HTTPTransport"))
+        patch.setattr(socket.socket, "connect", trap("socket.connect"))
+        yield attempts

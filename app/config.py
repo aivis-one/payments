@@ -55,7 +55,14 @@ class Settings(BaseSettings):
     MAX_OBSERVATION_WINDOW_DAYS: int = 7
 
     # Explorers.
+    #
+    # Both base URLs are configurable. TOR section 10 lists only the TronScan
+    # one; the omission of the Etherscan URL is an accident of that table
+    # rather than a decision, and hard-coding it here would make the accident
+    # permanent -- the host is the single knob that lets an operator point the
+    # service at a mirror or a testnet gateway without a code change.
     ETHERSCAN_API_KEY: str
+    ETHERSCAN_API_URL: str = "https://api.etherscan.io/v2/api"
     TRONSCAN_API_URL: str = "https://apilist.tronscan.org/api"
 
     # USDT contracts. Decimals are per-network and are NOT derivable from one

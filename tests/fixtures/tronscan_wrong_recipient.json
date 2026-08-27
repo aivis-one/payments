@@ -1,0 +1,34 @@
+{
+  "block": 49963474,
+  "hash": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+  "timestamp": 1680503190000,
+  "ownerAddress": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7",
+  "contractType": 31,
+  "confirmed": true,
+  "confirmations": 42,
+  "revert": false,
+  "contractRet": "SUCCESS",
+  "result": "SUCCESS",
+  "cost": {
+    "net_fee": 268000,
+    "energy_usage_total": 14650,
+    "fee": 268000
+  },
+  "trc20TransferInfo": [
+    {
+      "icon_url": "https://static.tronscan.org/x.png",
+      "symbol": "USDT",
+      "level": "2",
+      "to_address": "TAWE8B9DXDgTmfr3bhFsjZ4U8Jx4nFTTTT",
+      "contract_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      "type": "Transfer",
+      "decimals": 6,
+      "name": "Tether USD",
+      "vip": true,
+      "tokenType": "trc20",
+      "amount_str": "100000000",
+      "status": 0,
+      "from_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+    }
+  ]
+}

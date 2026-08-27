@@ -1,0 +1,24 @@
+{
+  "block": 49963474,
+  "hash": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+  "timestamp": 1680503190000,
+  "ownerAddress": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7",
+  "contractType": 1,
+  "confirmed": true,
+  "confirmations": 42,
+  "revert": false,
+  "contractRet": "SUCCESS",
+  "result": "SUCCESS",
+  "cost": {
+    "net_fee": 268000,
+    "energy_usage_total": 14650,
+    "fee": 268000
+  },
+  "toAddress": "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX",
+  "amount": "93000000",
+  "contractData": {
+    "amount": 93000000,
+    "owner_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7",
+    "to_address": "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX"
+  }
+}
