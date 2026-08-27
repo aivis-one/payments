@@ -47,7 +47,8 @@ from tests.explorers_support import (
 pytestmark = pytest.mark.no_network
 
 ETHERSCAN_URL = "https://api.etherscan.io/v2/api"
-TRONSCAN_URL = "https://apilist.tronscan.org/api"
+TRONSCAN_URL = "https://apilist.tronscanapi.com/api"
+TRONSCAN_KEY = "test-key-not-real"
 
 
 async def evm(response, *, contract=USDT_ERC20, wallet=EVM_WALLET, chain_id=1):
@@ -67,7 +68,7 @@ async def tron(response, *, contract=USDT_TRC20, wallet=TRON_WALLET):
     transport = RecordingTransport(response)
     async with client_for(transport) as client:
         adapter = TronScanAdapter(
-            client=client, api_url=TRONSCAN_URL, contract_address=contract
+            client=client, api_url=TRONSCAN_URL, api_key=TRONSCAN_KEY, contract_address=contract
         )
         return await adapter.lookup(TRON_TXID, wallet)
 
@@ -343,7 +344,12 @@ async def test_a_blank_contract_stops_both_adapters_from_being_built(blank: str)
                 chain_id=1,
             )
         with pytest.raises(ValueError, match="contract address"):
-            TronScanAdapter(client=client, api_url=TRONSCAN_URL, contract_address=blank)
+            TronScanAdapter(
+                client=client,
+                api_url=TRONSCAN_URL,
+                api_key=TRONSCAN_KEY,
+                contract_address=blank,
+            )
 
 
 async def test_a_truncated_contract_does_not_match_by_prefix():

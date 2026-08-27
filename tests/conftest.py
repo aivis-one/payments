@@ -127,7 +127,11 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 #: Test families that must reach no explorer, and therefore must carry one of
 #: the two markers below. Declared once, here, so that adding a family is one
 #: line rather than a second copy of the rule.
-NO_NETWORK_FAMILIES: tuple[str, ...] = ("test_explorers_*.py", "test_routes*.py")
+NO_NETWORK_FAMILIES: tuple[str, ...] = (
+    "test_explorers_*.py",
+    "test_routes*.py",
+    "test_worker*.py",
+)
 
 #: The two markers, weakest first.
 #:

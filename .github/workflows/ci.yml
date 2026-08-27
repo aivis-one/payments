@@ -34,6 +34,7 @@ jobs:
       WALLET_ADDRESS_USDT_ERC20: "0x0000000000000000000000000000000000000001"
       WALLET_ADDRESS_USDT_BSC20: "0x0000000000000000000000000000000000000002"
       ETHERSCAN_API_KEY: ci-not-a-real-key
+      TRONSCAN_API_KEY: ci-not-a-real-key
       SERVICE_TOKEN: ci-not-a-real-token
       # Turns "no database configured" from a silent skip into a failure, so a
       # green run cannot mean the database tests quietly did not execute.

@@ -111,7 +111,9 @@ async def test_a_tronscan_lookup_is_served_entirely_from_a_fixture(network_attem
         )
 
     assert transport.calls == 1
-    assert transport.requests[0].url.host == "apilist.tronscan.org"
+    # Host follows the configured default, which TOR section 10 moved to
+    # apilist.tronscanapi.com on 2026-08-27; the old one had gone stale.
+    assert transport.requests[0].url.host == "apilist.tronscanapi.com"
     assert transport.requests[0].url.params["hash"] == TRON_TXID
     assert result.verdict is Verdict.MATCHED
 

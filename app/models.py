@@ -30,11 +30,9 @@ from app.db import Base
 class Invoice(Base):
     """One top-up request: amount, address snapshot, lifecycle status.
 
-    Worker fields (``confirmations_seen``, ``last_checked_at``,
-    ``next_check_at``) are absent on purpose -- they belong to the background
-    worker that does not exist yet, and columns nobody reads or writes would be
-    an extension of this delivery's scope. They arrive with the worker, in
-    their own migration.
+    The three worker fields arrived with the worker, in their own migration,
+    exactly as TOR section 4 said they would: columns nobody reads or writes
+    are worse than absent ones.
     """
 
     __tablename__ = "invoices"
@@ -68,6 +66,32 @@ class Invoice(Base):
     # for expiry (TOR section 11 p.1); the bound on waiting becomes
     # MAX_OBSERVATION_WINDOW instead.
     slot_frozen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # -- worker bookkeeping (TOR section 4) ---------------------------------
+    #
+    # The last depth the worker read. Kept even though the decision is made
+    # from the fresh observation: without it, "nothing has changed since the
+    # last look" is not a question anyone can ask of the row.
+    confirmations_seen: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # When this invoice becomes due for another look.
+    #
+    # **NULL means "never looked at", and that is the permanent meaning of the
+    # column, not a migration artefact.** The API route that moves an invoice
+    # into ``awaiting_confirmations`` does not set this field and is not meant
+    # to: the request path stays unaware that a worker exists. So every invoice
+    # arrives here NULL and the worker's selection has to read NULL as due now.
+    # A predicate simplified to ``next_check_at <= now()`` would be false for
+    # NULL and the worker would see no invoices at all -- on an empty database
+    # that failure looks exactly like an idle service.
+    next_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

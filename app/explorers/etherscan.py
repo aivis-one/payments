@@ -36,7 +36,7 @@ import httpx
 from app.domain.addresses import EVM_ADDRESS
 from app.domain.statuses import Verdict
 from app.explorers.matching import TRANSFER_TOPIC, Transfer, classify
-from app.explorers.protocol import ExplorerResult
+from app.explorers.protocol import ExplorerObservation, ExplorerResult
 from app.explorers.transport import ExplorerUnavailable, fetch_json
 
 _HEX_QUANTITY: Final[re.Pattern[str]] = re.compile(r"0x[0-9a-fA-F]+")
@@ -47,6 +47,13 @@ def _address_from_topic(topic: object) -> str:
     if not isinstance(topic, str) or len(topic) < 42:
         raise ValueError(f"topic is not an address: {topic!r}")
     return "0x" + topic[-40:].lower()
+
+
+def _hex_int(value: object) -> int | None:
+    """Read a hex quantity, or ``None`` when the value is not one."""
+    if not isinstance(value, str) or _HEX_QUANTITY.fullmatch(value) is None:
+        return None
+    return int(value, 16)
 
 
 def _amount_from_data(data: object) -> int:
@@ -118,6 +125,72 @@ class EtherscanAdapter:
             return ExplorerResult(verdict=Verdict.API_ERROR)
 
         return self._classify(payload, wallet_address.strip().lower())
+
+    async def observe(self, txid: str, wallet_address: str) -> ExplorerObservation:
+        """Fetch the receipt, then the chain head, and subtract. See the protocol.
+
+        Two calls, and only the worker makes them. A receipt cannot say how
+        deeply a transaction is buried: it carries the block the transaction
+        landed in and nothing about where the chain has got to since.
+
+        **Depth is counted the conservative way.** A transaction sitting in the
+        head block reports zero confirmations here, not one. The two readings
+        differ by a block and the direction matters: the optimistic one credits
+        a payment one block earlier than the operator asked for, and how much
+        reorg risk to take is exactly what ``CONFIRMATIONS_REQUIRED`` encodes.
+        It is also Etherscan's own convention in ``txlist``.
+        """
+        if not wallet_address.strip():
+            raise ValueError("wallet_address must not be blank")
+
+        receipt = await self._fetch_receipt(txid)
+        if receipt is None:
+            return ExplorerObservation(result=ExplorerResult(verdict=Verdict.API_ERROR))
+
+        result = self._classify(receipt, wallet_address.strip().lower())
+        if result.verdict is not Verdict.MATCHED:
+            return ExplorerObservation(result=result)
+
+        body = receipt.get("result")
+        mined = _hex_int(body.get("blockNumber")) if isinstance(body, dict) else None
+        head = await self._chain_head()
+        if mined is None or head is None:
+            return ExplorerObservation(result=ExplorerResult(verdict=Verdict.API_ERROR))
+
+        # Clamped rather than refused. A node whose head lags a block it has
+        # already served is inconsistent, not broken, and the honest reading of
+        # a negative depth is "not confirmed yet" -- which is what zero says.
+        return ExplorerObservation(result=result, confirmations=max(0, head - mined))
+
+    async def _chain_head(self) -> int | None:
+        try:
+            payload = await fetch_json(
+                self._client,
+                self._api_url,
+                {
+                    "chainid": str(self._chain_id),
+                    "module": "proxy",
+                    "action": "eth_blockNumber",
+                    "apikey": self._api_key,
+                },
+            )
+        except ExplorerUnavailable:
+            return None
+        return _hex_int(payload.get("result")) if isinstance(payload, dict) else None
+
+    async def _fetch_receipt(self, txid: str) -> dict[str, object] | None:
+        params = {
+            "chainid": str(self._chain_id),
+            "module": "proxy",
+            "action": "eth_getTransactionReceipt",
+            "txhash": txid,
+            "apikey": self._api_key,
+        }
+        try:
+            payload = await fetch_json(self._client, self._api_url, params)
+        except ExplorerUnavailable:
+            return None
+        return payload if isinstance(payload, dict) else None
 
     def _classify(self, payload: object, wallet_address: str) -> ExplorerResult:
         if not isinstance(payload, dict):

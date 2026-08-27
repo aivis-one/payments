@@ -56,7 +56,8 @@ async def test_both_adapters_satisfy_the_protocol():
         )
         tron: ExplorerAdapter = TronScanAdapter(
             client=client,
-            api_url="https://apilist.tronscan.org/api",
+            api_url="https://apilist.tronscanapi.com/api",
+            api_key="k",
             contract_address="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
         )
 

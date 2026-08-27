@@ -81,6 +81,40 @@ class ExplorerResult:
             raise ValueError(f"{self.verdict} must not carry from_address")
 
 
+@dataclass(frozen=True, slots=True)
+class ExplorerObservation:
+    """One look at a transaction that is already holding an invoice's slot.
+
+    Composition rather than an extra field on :class:`ExplorerResult`. The
+    submission path never needs a confirmation depth, and giving it a field
+    that is always ``None`` there would be a lie about when it is populated --
+    besides which computing depth costs a second call on EVM, which that path
+    must not pay for (TOR section 7: it is synchronous and already carries up
+    to seven seconds of retry).
+
+    ``raw_amount`` is read again here rather than carried over from the match.
+    TOR section 6 fixes the credited amount at the moment ``confirmations >=
+    N``, not at match time, which is also why ``ConfirmationsObserved`` asks
+    for both numbers together and why this is one call rather than two.
+    """
+
+    result: ExplorerResult
+    confirmations: int | None = None
+
+    def __post_init__(self) -> None:
+        # A depth is only meaningful for a transaction we recognised. If a
+        # re-observation comes back not_found -- a reorg displaced it, say --
+        # there is no depth to report, and inventing zero would read as "seen,
+        # not yet confirmed" instead of "no longer there".
+        if self.result.verdict is Verdict.MATCHED:
+            if self.confirmations is None:
+                raise ValueError("a matched observation must carry confirmations")
+            if self.confirmations < 0:
+                raise ValueError(f"confirmations must be non-negative, got {self.confirmations}")
+        elif self.confirmations is not None:
+            raise ValueError(f"{self.result.verdict} must not carry confirmations")
+
+
 class ExplorerAdapter(Protocol):
     """What :mod:`app.explorers.retry` and :mod:`app.explorers.verify` require."""
 
@@ -94,5 +128,19 @@ class ExplorerAdapter(Protocol):
                 stored address is corrupt data, not a domain state, and
                 comparing against an empty string would quietly turn every
                 payment into ``not_found``.
+        """
+        ...
+
+    async def observe(self, txid: str, wallet_address: str) -> ExplorerObservation:
+        """Re-read the transaction and report how deeply it is buried.
+
+        Used only by the confirmations worker. Whether this costs one call or
+        two is the adapter's business: TRON reports depth in the same response
+        that carries the transfer, EVM needs the chain head as well.
+
+        No retry here. The retry series exists because a freshly submitted hash
+        may not be indexed yet; a transaction that already took an invoice's
+        slot was indexed once, and if it has gone missing the worker wants to
+        know now rather than seven seconds from now.
         """
         ...

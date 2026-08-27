@@ -123,6 +123,7 @@ def make_settings(**overrides: object) -> Settings:
         "WALLET_ADDRESS_USDT_ERC20": EVM_WALLET,
         "WALLET_ADDRESS_USDT_BSC20": EVM_WALLET,
         "ETHERSCAN_API_KEY": "test-key-not-real",
+        "TRONSCAN_API_KEY": "test-key-not-real",
     }
     values.update(overrides)
     return Settings(**values)  # type: ignore[arg-type]

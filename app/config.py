@@ -61,6 +61,29 @@ class Settings(BaseSettings):
     MAX_TXID_ATTEMPTS: int = 3
     MAX_OBSERVATION_WINDOW_DAYS: int = 7
 
+    # Background worker (P-13/P-14). TOR section 10 names none of these: the
+    # worker did not exist when the table was written.
+    #
+    # The polling schedule backs off with the *age of the slot*, not with a
+    # count of failures. Confirmations accrue in minutes -- roughly a minute for
+    # 20 TRON blocks, 45 seconds for 15 on BSC, two and a half for 12 on
+    # Ethereum -- so a transaction still unconfirmed after an hour is stuck or
+    # displaced, and hourly is enough for it. A flat minute for the whole
+    # seven-day observation window would be about 10,000 calls per stuck
+    # invoice; this is about 190. The age is already on the row as
+    # ``slot_frozen_at``, so no failure counter and no fourth column.
+    WORKER_TICK_SECONDS: float = 5.0
+    WORKER_POLL_MIN_SECONDS: float = 30.0
+    WORKER_POLL_MAX_SECONDS: float = 3600.0
+
+    # How long a claimed invoice stays invisible to other workers. Generous
+    # against the seven seconds a lookup can take, and short enough that a
+    # worker killed mid-poll only strands its invoice for five minutes.
+    WORKER_LEASE_SECONDS: float = 300.0
+
+    # How many invoices one tick claims.
+    WORKER_BATCH_SIZE: int = 50
+
     # Explorers.
     #
     # Both base URLs are configurable. TOR section 10 lists only the TronScan
@@ -70,7 +93,13 @@ class Settings(BaseSettings):
     # service at a mirror or a testnet gateway without a code change.
     ETHERSCAN_API_KEY: str
     ETHERSCAN_API_URL: str = "https://api.etherscan.io/v2/api"
-    TRONSCAN_API_URL: str = "https://apilist.tronscan.org/api"
+    TRONSCAN_API_URL: str = "https://apilist.tronscanapi.com/api"
+
+    # Mandatory since TOR section 10 of 2026-08-27. TronScan no longer serves
+    # unkeyed callers at a guaranteed rate and answers 401 on some endpoints,
+    # so a service without a key works until it is under load and then does
+    # not. No default: an absent key must stop the process, not degrade it.
+    TRONSCAN_API_KEY: str
 
     # USDT contracts. Decimals are per-network and are NOT derivable from one
     # formula: Binance-Peg BSC-USD carries 18 decimals, not 6 (TOR section 6b).

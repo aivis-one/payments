@@ -65,6 +65,7 @@ def _tronscan(contract: Callable[[Settings], str]) -> AdapterBuilder:
         return TronScanAdapter(
             client=client,
             api_url=settings.TRONSCAN_API_URL,
+            api_key=settings.TRONSCAN_API_KEY,
             contract_address=contract(settings),
         )
 

@@ -34,7 +34,10 @@ from tests.explorers_support import (
 #: there for why the trap is opt-in rather than always on.
 pytestmark = pytest.mark.no_network
 
-API_URL = "https://apilist.tronscan.org/api"
+API_URL = "https://apilist.tronscanapi.com/api"
+
+#: TOR section 10 made the key mandatory; the adapter refuses a blank one.
+TRONSCAN_KEY = "test-key-not-real"
 
 
 async def ask(
@@ -45,7 +48,12 @@ async def ask(
 ):
     transport = RecordingTransport(response)
     async with client_for(transport) as client:
-        adapter = TronScanAdapter(client=client, api_url=API_URL, contract_address=contract)
+        adapter = TronScanAdapter(
+            client=client,
+            api_url=API_URL,
+            api_key=TRONSCAN_KEY,
+            contract_address=contract,
+        )
         result = await adapter.lookup(TRON_TXID, wallet)
     return result, transport
 
@@ -80,7 +88,10 @@ async def test_an_upper_cased_contract_never_gets_as_far_as_a_comparison():
     async with client_for(transport) as client:
         with pytest.raises(ValueError, match="contract address"):
             TronScanAdapter(
-                client=client, api_url=API_URL, contract_address=USDT_TRC20.upper()
+                client=client,
+                api_url=API_URL,
+                api_key=TRONSCAN_KEY,
+                contract_address=USDT_TRC20.upper(),
             )
 
 
@@ -233,7 +244,12 @@ async def test_a_transport_failure_is_an_api_error_not_an_exception():
 
     transport = httpx.MockTransport(explode)
     async with client_for(transport) as client:
-        adapter = TronScanAdapter(client=client, api_url=API_URL, contract_address=USDT_TRC20)
+        adapter = TronScanAdapter(
+            client=client,
+            api_url=API_URL,
+            api_key=TRONSCAN_KEY,
+            contract_address=USDT_TRC20,
+        )
         result = await adapter.lookup(TRON_TXID, TRON_WALLET)
 
     assert result.verdict is Verdict.API_ERROR
@@ -258,7 +274,12 @@ async def test_a_trailing_slash_in_the_configured_url_does_not_double_up(api_url
     """The default in TOR section 10 has no trailing slash; an operator's may."""
     transport = RecordingTransport(json_response(load("tronscan_not_found")))
     async with client_for(transport) as client:
-        adapter = TronScanAdapter(client=client, api_url=api_url, contract_address=USDT_TRC20)
+        adapter = TronScanAdapter(
+            client=client,
+            api_url=api_url,
+            api_key=TRONSCAN_KEY,
+            contract_address=USDT_TRC20,
+        )
         await adapter.lookup(TRON_TXID, TRON_WALLET)
 
     assert transport.requests[0].url.path == "/api/transaction-info"
@@ -284,7 +305,12 @@ async def test_a_contract_address_that_is_not_one_stops_the_adapter(contract: st
     transport = RecordingTransport()
     async with client_for(transport) as client:
         with pytest.raises(ValueError, match="contract address"):
-            TronScanAdapter(client=client, api_url=API_URL, contract_address=contract)
+            TronScanAdapter(
+                client=client,
+                api_url=API_URL,
+                api_key=TRONSCAN_KEY,
+                contract_address=contract,
+            )
 
 
 @pytest.mark.parametrize("api_url", ["", "   "])
@@ -292,14 +318,24 @@ async def test_a_blank_api_url_stops_the_adapter(api_url: str):
     transport = RecordingTransport()
     async with client_for(transport) as client:
         with pytest.raises(ValueError, match="api_url"):
-            TronScanAdapter(client=client, api_url=api_url, contract_address=USDT_TRC20)
+            TronScanAdapter(
+                client=client,
+                api_url=api_url,
+                api_key=TRONSCAN_KEY,
+                contract_address=USDT_TRC20,
+            )
 
 
 @pytest.mark.parametrize("wallet", ["", "   "])
 async def test_a_blank_wallet_address_is_refused_per_call(wallet: str):
     transport = RecordingTransport()
     async with client_for(transport) as client:
-        adapter = TronScanAdapter(client=client, api_url=API_URL, contract_address=USDT_TRC20)
+        adapter = TronScanAdapter(
+            client=client,
+            api_url=API_URL,
+            api_key=TRONSCAN_KEY,
+            contract_address=USDT_TRC20,
+        )
         with pytest.raises(ValueError, match="wallet_address"):
             await adapter.lookup(TRON_TXID, wallet)
 

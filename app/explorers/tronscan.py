@@ -29,8 +29,13 @@ import httpx
 from app.domain.addresses import TRON_ADDRESS
 from app.domain.statuses import Verdict
 from app.explorers.matching import Transfer, classify
-from app.explorers.protocol import ExplorerResult
+from app.explorers.protocol import ExplorerObservation, ExplorerResult
 from app.explorers.transport import ExplorerUnavailable, fetch_json
+
+#: TronScan's API key header (TOR section 10). Sent on every request: an
+#: unkeyed caller is rate-limited rather than refused, so the failure this
+#: prevents is intermittent under load rather than obvious at startup.
+API_KEY_HEADER: Final[str] = "TRON-PRO-API-KEY"
 
 #: ``TriggerSmartContract``. Any contract call, token or not.
 TRIGGER_SMART_CONTRACT: Final[int] = 31
@@ -64,28 +69,33 @@ class TronScanAdapter:
         *,
         client: httpx.AsyncClient,
         api_url: str,
+        api_key: str,
         contract_address: str,
     ) -> None:
         """Build the adapter, refusing to start misconfigured.
 
-        No API key argument: TOR section 10 describes TronScan as public and
-        keyless, and adding a key would mean adding a config entity this task
-        is not authorised to add. That the description has since gone stale is
-        recorded in the delivery report, not worked around here.
+        The API key is checked the same way Etherscan's is, and for the same
+        reason: a blank one is not refused by the explorer, it is silently
+        throttled. That failure surfaces weeks later as intermittent
+        ``api_error`` under load rather than as a service that will not start,
+        and ``Settings`` accepts ``""`` for a mandatory ``str`` field.
 
         Raises:
-            ValueError: on a blank URL, or a contract address that is not
-                shaped like a TRON base58 address. An empty contract address
-                would match nothing and turn every genuine payment into
-                ``not_found``; ``Settings`` accepts an empty string for it.
+            ValueError: on a blank URL or key, or a contract address that is
+                not shaped like a TRON base58 address. An empty contract
+                address would match nothing and turn every genuine payment
+                into ``not_found``.
         """
         if not api_url.strip():
             raise ValueError("tronscan api_url must not be blank")
+        if not api_key.strip():
+            raise ValueError("tronscan api_key must not be blank")
         if TRON_ADDRESS.fullmatch(contract_address.strip()) is None:
             raise ValueError(f"not a TRON contract address: {contract_address!r}")
 
         self._client = client
         self._url = api_url.strip().rstrip("/") + "/transaction-info"
+        self._headers = {API_KEY_HEADER: api_key.strip()}
         self._contract = contract_address.strip()
 
     async def lookup(self, txid: str, wallet_address: str) -> ExplorerResult:
@@ -94,11 +104,50 @@ class TronScanAdapter:
             raise ValueError("wallet_address must not be blank")
 
         try:
-            payload = await fetch_json(self._client, self._url, {"hash": txid})
+            payload = await fetch_json(
+                self._client, self._url, {"hash": txid}, headers=self._headers
+            )
         except ExplorerUnavailable:
             return ExplorerResult(verdict=Verdict.API_ERROR)
 
         return self._classify(payload, wallet_address.strip())
+
+    async def observe(self, txid: str, wallet_address: str) -> ExplorerObservation:
+        """One call. TronScan reports the depth in the same record as the transfer.
+
+        The asymmetry with the EVM adapter is the chain's, not a design choice:
+        TRON's transaction record carries ``confirmations`` outright, while an
+        Ethereum receipt carries only the block it landed in and has to be
+        subtracted from the chain head.
+
+        The reported number is taken as TronScan states it. The two chains'
+        conventions may differ by one block, and the EVM side is deliberately
+        counted conservatively for that reason; here there is nothing to
+        choose, and inventing an adjustment would be guessing at somebody
+        else's definition.
+        """
+        if not wallet_address.strip():
+            raise ValueError("wallet_address must not be blank")
+
+        try:
+            payload = await fetch_json(
+                self._client, self._url, {"hash": txid}, headers=self._headers
+            )
+        except ExplorerUnavailable:
+            return ExplorerObservation(result=ExplorerResult(verdict=Verdict.API_ERROR))
+
+        result = self._classify(payload, wallet_address.strip())
+        if result.verdict is not Verdict.MATCHED:
+            return ExplorerObservation(result=result)
+
+        depth = payload.get("confirmations") if isinstance(payload, dict) else None
+        if not isinstance(depth, int) or isinstance(depth, bool) or depth < 0:
+            # Matched but undatable. Reporting zero would say "seen, not yet
+            # confirmed" about a transaction whose depth we simply failed to
+            # read, and the worker would wait on it forever.
+            return ExplorerObservation(result=ExplorerResult(verdict=Verdict.API_ERROR))
+
+        return ExplorerObservation(result=result, confirmations=depth)
 
     def _classify(self, payload: object, wallet_address: str) -> ExplorerResult:
         if not isinstance(payload, dict):

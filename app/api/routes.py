@@ -25,7 +25,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,6 +104,7 @@ async def _load(session: AsyncSession, invoice_id: uuid.UUID) -> Invoice:
 @router.post("/invoices", response_model=InvoiceCreated, status_code=status.HTTP_201_CREATED)
 async def create_invoice(
     body: CreateInvoiceRequest,
+    response: Response,
     session: SessionDep,
     settings: SettingsDep,
 ) -> Invoice:
@@ -149,6 +150,12 @@ async def create_invoice(
     session.add(invoice)
     await session.commit()
     await session.refresh(invoice)
+
+    # TOR section 8: 201 without Location is the form of the convention without
+    # its content -- the code says "something was created" and then declines to
+    # say where. Relative, because the service does not know its own public
+    # origin: it sits behind whatever the deploy contract puts in front of it.
+    response.headers["Location"] = f"/api/v1/invoices/{invoice.id}"
     return invoice
 
 

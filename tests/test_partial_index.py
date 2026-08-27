@@ -159,14 +159,38 @@ async def test_invoice_defaults_are_applied(session: AsyncSession):
     assert invoice.created_at is not None
 
 
-async def test_worker_fields_are_absent_from_the_table(session: AsyncSession):
-    """They belong to the worker that does not exist yet.
+async def test_worker_fields_are_present_and_nullable_where_they_must_be(
+    session: AsyncSession,
+):
+    """The worker exists now, so the three columns do too.
 
-    Checked as "absent, and the columns that should be there are present" --
-    an absence assertion on its own would pass against an empty table just as
-    happily.
+    Until H4 this asserted the opposite -- that the three were **absent** --
+    and it was right about what it measured: TOR section 4 kept them out of the
+    first migration because a column nobody reads or writes is a promise the
+    schema cannot keep. What overrode it is that the worker arrived, in its own
+    revision, exactly as that note said it would.
+
+    The assertion is not dropped, it is re-pointed at the property that matters
+    now. ``next_check_at`` must stay nullable: NULL is its permanent meaning,
+    "never looked at", because the API route that moves an invoice into
+    ``awaiting_confirmations`` does not set it and is not meant to. A NOT NULL
+    with a default here would make every migrated row look already scheduled.
+
+    The paired half of the original is kept: absence, or presence, means
+    nothing unless the columns that should be there are checked too.
     """
-    columns = set(Invoice.__table__.columns.keys())
+    columns = Invoice.__table__.columns
 
-    assert {"confirmations_seen", "last_checked_at", "next_check_at"} & columns == set()
-    assert {"status", "attempts_used", "expires_at", "slot_frozen_at"} <= columns
+    assert {"confirmations_seen", "last_checked_at", "next_check_at"} <= set(columns.keys())
+    assert {"status", "attempts_used", "expires_at", "slot_frozen_at"} <= set(columns.keys())
+
+    assert columns["next_check_at"].nullable
+    assert columns["last_checked_at"].nullable
+    assert not columns["confirmations_seen"].nullable
+
+    invoice = await _make_invoice(session)
+    await session.refresh(invoice)
+
+    assert invoice.confirmations_seen == 0
+    assert invoice.last_checked_at is None
+    assert invoice.next_check_at is None

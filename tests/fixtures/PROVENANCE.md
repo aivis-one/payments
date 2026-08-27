@@ -28,6 +28,14 @@ Everything else here is combinatorial content built on top of those envelopes
 to the wrong address. Those shapes are not in question; which contract emitted
 a transfer and who received it is plain in both APIs.
 
+H4 added one more envelope, `etherscan_block_number.json`, on the same terms:
+the JSON-RPC shape of `eth_blockNumber` is documented, the value in it is
+chosen so that the depth against the receipt fixtures comes out to a readable
+number. TronScan's `confirmations` field, which the worker reads straight out
+of the transaction record, is documented too and likewise unprobed -- it is the
+third delivery running that we write against documentation rather than a
+capture, and the open item belongs to the owner rather than to any of them.
+
 Deliberately malformed payloads -- a receipt with no `logs` key, topics of the
 wrong length, an unreadable amount -- are **not** stored here. They are built
 inline in the test that uses them, next to the sentence explaining what is
