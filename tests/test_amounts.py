@@ -78,11 +78,22 @@ def test_decimals_below_two_is_rejected():
 
 
 def _settings() -> Settings:
+    """Settings for the policy tests.
+
+    The placeholder addresses used to be ``"T1"`` and ``"0x1"`` -- short enough
+    to read, and impossible on any chain. H3 made ``Settings`` refuse to build
+    on a wallet address that is not shaped like a real one, because an invoice
+    snapshots that value onto its own row and a malformed one survives every
+    later fix to the environment. These tests are about ``policy_for``, not
+    about addresses, so they now carry real shapes and say nothing else about
+    them.
+    """
     return Settings(
         DATABASE_URL="postgresql+asyncpg://u:p@localhost/db",
-        WALLET_ADDRESS_USDT_TRC20="T1",
-        WALLET_ADDRESS_USDT_ERC20="0x1",
-        WALLET_ADDRESS_USDT_BSC20="0x2",
+        SERVICE_TOKEN="token",
+        WALLET_ADDRESS_USDT_TRC20="TMuA6YqfCeX8EhbfYEg5y7S4DqzSJireY9",
+        WALLET_ADDRESS_USDT_ERC20="0x0000000000000000000000000000000000000001",
+        WALLET_ADDRESS_USDT_BSC20="0x0000000000000000000000000000000000000002",
         ETHERSCAN_API_KEY="key",
     )
 

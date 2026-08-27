@@ -26,6 +26,7 @@ import pytest
 
 from app.domain.statuses import Verdict
 from app.explorers.verify import verify_txid
+from tests.conftest import NO_NETWORK_FAMILIES
 from tests.explorers_support import (
     EVM_TXID,
     EVM_WALLET,
@@ -184,18 +185,22 @@ async def _no_sleep(delay: float) -> None:
 TESTS_DIR = pathlib.Path(__file__).parent
 
 
-def test_every_explorer_module_declares_the_marker():
+@pytest.mark.parametrize("family", NO_NETWORK_FAMILIES)
+def test_every_module_of_a_no_network_family_declares_the_marker(family: str):
     """A directory could not be forgotten; a marker can.
 
-    The trap is opt-in, so a new ``test_explorers_*.py`` written without
-    ``pytestmark`` would simply not be guarded -- and would pass, quietly, with
-    the guarantee gone. That is the one thing the flat layout costs, and this is
-    where it is paid back: the obligation is checked mechanically rather than
-    remembered.
-    """
-    modules = sorted(TESTS_DIR.glob("test_explorers_*.py"))
+    The trap is opt-in, so a module written without ``pytestmark`` would simply
+    not be guarded -- and would pass, quietly, with the guarantee gone. That is
+    what the flat layout costs, and this is where it is paid back.
 
-    assert len(modules) >= 7, "the glob matched almost nothing; the naming changed"
+    Parametrised over the families declared in ``tests/conftest.py`` rather
+    than over a glob written here. H3 added a second family; hard-coding it
+    would have made the obligation two copies, and the first person to add a
+    third would have updated one of them.
+    """
+    modules = sorted(TESTS_DIR.glob(family))
+
+    assert modules, f"the glob {family!r} matched nothing; the naming changed"
     missing = [m.name for m in modules if "pytest.mark.no_network" not in m.read_text()]
     assert missing == []
 

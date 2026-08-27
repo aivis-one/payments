@@ -15,7 +15,6 @@ TXID = "0xdeadbeef"
 SPENDING = [
     Verdict.NOT_FOUND,
     Verdict.WRONG_ADDRESS,
-    Verdict.WRONG_NETWORK,
     Verdict.ALREADY_USED,
 ]
 
@@ -163,8 +162,18 @@ def test_verdict_is_total_over_every_status_and_verdict():
             decide(snapshot(status), TxidVerdict(verdict=verdict, txid=TXID), NOW, POLICY_6)
 
 
-def test_only_five_verdicts_ever_become_a_row():
-    """api_error and invalid_format have no result_code to be written as."""
+def test_only_four_verdicts_ever_become_a_row():
+    """api_error and invalid_format have no result_code to be written as.
+
+    Was ``five`` until wrong_network was removed (TOR section 11 p.4). The old
+    count was right about what it measured -- every verdict that can become a
+    row -- and what overrode it is that one of those verdicts turned out to be
+    produced by nobody: the format gate rejects a foreign-network TXID for
+    free, and the two EVM networks share a hash format, so no call ever
+    concluded ``wrong_network``. The assertion is not relaxed here; it is
+    re-pointed at the same property with the correct number, and it still
+    fails if a member is added without a mapping.
+    """
     recorded = {
         decide(
             snapshot(InvoiceStatus.CREATED), TxidVerdict(verdict=v, txid=TXID), NOW, POLICY_6
@@ -173,4 +182,4 @@ def test_only_five_verdicts_ever_become_a_row():
     }
 
     assert recorded == {None, *AttemptResultCode}
-    assert len(AttemptResultCode) == 5
+    assert len(AttemptResultCode) == 4

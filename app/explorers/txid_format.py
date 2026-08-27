@@ -21,8 +21,9 @@ import re
 from typing import Final
 
 #: Ethereum and BSC. Identical by construction -- the two chains share a hash
-#: format, which is exactly why no regex can tell an ERC20 TXID from a BSC20
-#: one and why ``wrong_network`` is unreachable between them.
+#: format, so no regex can tell an ERC20 TXID from a BSC20 one. Distinguishing
+#: them would need a call to the other chain, which nothing here does: a hash
+#: submitted against the wrong EVM network simply comes back not found.
 EVM_TXID: Final[re.Pattern[str]] = re.compile(r"0x[0-9a-fA-F]{64}")
 
 #: TRON. Same 32 bytes, written without the ``0x`` prefix.

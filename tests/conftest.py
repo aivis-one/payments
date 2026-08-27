@@ -124,6 +124,14 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         yield s
 
 
+#: Test families that must reach no explorer, and therefore must carry
+#: ``pytestmark = pytest.mark.no_network``. Declared once, here: the trap below
+#: reads nothing from it, but the obligation test in
+#: ``tests/test_explorers_no_network.py`` walks it, so adding a family is one
+#: line rather than a second copy of the rule.
+NO_NETWORK_FAMILIES: tuple[str, ...] = ("test_explorers_*.py", "test_routes*.py")
+
+
 @pytest.fixture(autouse=True)
 def network_attempts(request: pytest.FixtureRequest) -> Iterator[list[str]]:
     """Arm a network trap for modules that declare ``pytest.mark.no_network``.

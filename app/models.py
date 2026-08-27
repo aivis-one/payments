@@ -89,7 +89,7 @@ class InvoiceTxidAttempt(Base):
     ``invoices.active_txid`` -- otherwise a rejected attempt would leave its
     TXID free to be reused against another invoice.
 
-    Rows exist for five result codes only. ``api_error`` never produces a row
+    Rows exist for four result codes only. ``api_error`` never produces a row
     at all, and a malformed TXID is rejected before the explorer call, so
     neither can appear in ``result_code``.
     """

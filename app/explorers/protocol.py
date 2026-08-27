@@ -35,22 +35,21 @@ from app.domain.statuses import Verdict
 class ExplorerResult:
     """One final verdict about one TXID, plus what only the adapter can know.
 
-    ``verdict`` is typed as the whole seven-member :class:`Verdict` rather than
+    ``verdict`` is typed as the whole six-member :class:`Verdict` rather than
     a narrower enum of its own: the vocabulary belongs to the domain and
-    forking it here would create a second place to add an eighth member. What
-    an adapter can actually produce is four of the seven:
+    forking it here would create a second place to add a seventh member. What
+    an adapter can actually produce is four of the six:
 
     * ``matched``, ``not_found``, ``wrong_address`` -- content answers;
     * ``api_error`` -- the explorer did not give a content answer at all.
 
-    The other three are produced elsewhere by construction. ``invalid_format``
-    comes from the regex gate before any adapter is built. ``already_used`` is
-    a verdict of the partial unique index, which an adapter cannot see.
-    ``wrong_network`` is produced by nobody today: the format gate rejects a
-    foreign-network TXID as ``invalid_format`` and the two EVM networks share
-    one format, so telling them apart would need a cross-chain call that no
-    task authorises. That is a live question for the owner, not an oversight --
-    see the delivery report.
+    The other two are produced elsewhere by construction. ``invalid_format``
+    comes from the regex gate before any adapter is built: a TXID that does not
+    match its own network's shape is refused for free, before any call, so it
+    never reaches an adapter to be classified. ``already_used`` is decided at
+    the INSERT against the partial unique index -- the explorer cannot know
+    that some other invoice already holds this TXID, so no adapter can produce
+    it either.
 
     ``from_address`` is the *Transfer sender*, not the account that submitted
     the transaction. The two differ whenever a contract moves tokens on

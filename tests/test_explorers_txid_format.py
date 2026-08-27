@@ -143,12 +143,12 @@ async def test_a_malformed_tron_txid_never_reaches_the_explorer(txid: str):
 async def test_a_tron_shaped_hash_on_an_evm_invoice_is_free(network: str):
     """The owner's ruling on Q1, and it is about money.
 
-    ``invalid_format`` costs the user nothing; ``wrong_network`` would create
-    an attempt row and spend one of three. TOR section 7 charges only for
-    TXIDs that reached the explorer and got a content answer, and this one
-    never left the process. Somebody who picks the wrong network three times
-    in a UI would otherwise end up with a locked invoice and, quite possibly,
-    money already sent on the other chain.
+    ``invalid_format`` costs the user nothing. Classifying it as a spent
+    attempt instead would create a row and burn one of three. TOR section 7
+    charges only for TXIDs that reached the explorer and got a content answer,
+    and this one never left the process. Somebody who picks the wrong network
+    three times in a UI would otherwise end up with a locked invoice and,
+    quite possibly, money already sent on the other chain.
     """
     verdict, calls = await gate(network, GOOD_TRON, EVM_WALLET)
 

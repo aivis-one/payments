@@ -10,9 +10,8 @@ recorded that this could not be observed anywhere yet; it is observable here.
 which is the case worth waiting on. ``api_error`` leaves immediately: TOR
 section 7 explicitly allows either retrying or answering "resubmit the TXID"
 without charging, the attempt is not spent either way, and infrastructure that
-just failed is unlikely to recover inside the next second. ``matched``,
-``wrong_address`` and ``wrong_network`` are content answers that no amount of
-waiting will change.
+just failed is unlikely to recover inside the next second. ``matched`` and
+``wrong_address`` are content answers that no amount of waiting will change.
 
 **Why the delays are a parameter and not three literals.** ``RETRY_DELAYS``
 alone determines both the pacing and the number of calls, so the two can never

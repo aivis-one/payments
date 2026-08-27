@@ -15,8 +15,10 @@ from __future__ import annotations
 from datetime import timedelta
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.addresses import is_evm_address, is_tron_address
 from app.domain.policy import Policy
 
 
@@ -38,6 +40,11 @@ class Settings(BaseSettings):
 
     # Infrastructure. Not part of the TOR section 10 table; required to run.
     DATABASE_URL: str
+
+    # Bearer credential for every inbound route (TOR section 8). Mandatory
+    # and validated below: an empty token compared against an empty header
+    # authenticates everyone.
+    SERVICE_TOKEN: str
 
     # Wallet addresses -- mandatory, no defaults.
     WALLET_ADDRESS_USDT_TRC20: str
@@ -73,6 +80,53 @@ class Settings(BaseSettings):
     USDT_DECIMALS_TRC20: int = 6
     USDT_DECIMALS_ERC20: int = 6
     USDT_DECIMALS_BSC20: int = 18
+
+    @model_validator(mode="after")
+    def _refuse_to_boot_misconfigured(self) -> Settings:
+        """Fail closed on credentials and addresses, at import rather than in use.
+
+        Both checks guard values that pydantic accepts happily: a mandatory
+        ``str`` field is satisfied by ``""``, so every secret in this class can
+        be blank without anything complaining.
+
+        **The token.** An empty ``SERVICE_TOKEN`` compared against an empty
+        ``Authorization`` header succeeds, so a blank value does not lock the
+        service down -- it opens it to everyone. That failure is silent and
+        looks exactly like working authentication.
+
+        **The addresses.** This is the one that is silent *and* permanent. An
+        invoice snapshots the configured address onto its own row (TOR section
+        4), so a blank or malformed value does not merely break the next
+        payment: it is copied into the database and survives any later fix to
+        the environment. Every invoice issued in that window is a payment
+        instruction to nowhere, and no amount of correcting config afterwards
+        repairs one.
+
+        Checked per field rather than per network on purpose. The field name
+        already carries the network, so no fourth copy of the network-name
+        table is needed to know which shape applies.
+
+        Format, not just emptiness: a value can be non-blank and still be
+        unusable. ``TCiTestTronAddressForCiOnly000000000`` sat in this
+        project's own CI for two deliveries -- 36 characters instead of 34,
+        containing ``0``, ``O`` and ``l``, which base58 does not have.
+        """
+        if not self.SERVICE_TOKEN.strip():
+            raise ValueError("SERVICE_TOKEN must not be blank")
+
+        malformed = [
+            name
+            for name, value, ok in (
+                ("WALLET_ADDRESS_USDT_TRC20", self.WALLET_ADDRESS_USDT_TRC20, is_tron_address),
+                ("WALLET_ADDRESS_USDT_ERC20", self.WALLET_ADDRESS_USDT_ERC20, is_evm_address),
+                ("WALLET_ADDRESS_USDT_BSC20", self.WALLET_ADDRESS_USDT_BSC20, is_evm_address),
+            )
+            if not ok(value)
+        ]
+        if malformed:
+            raise ValueError(f"not usable wallet addresses: {', '.join(malformed)}")
+
+        return self
 
     def wallet_address_for(self, network: str) -> str:
         """Return the configured wallet address for ``network``.

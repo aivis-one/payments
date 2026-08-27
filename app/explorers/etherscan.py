@@ -33,12 +33,12 @@ from typing import Final
 
 import httpx
 
+from app.domain.addresses import EVM_ADDRESS
 from app.domain.statuses import Verdict
 from app.explorers.matching import TRANSFER_TOPIC, Transfer, classify
 from app.explorers.protocol import ExplorerResult
 from app.explorers.transport import ExplorerUnavailable, fetch_json
 
-_EVM_ADDRESS: Final[re.Pattern[str]] = re.compile(r"0x[0-9a-fA-F]{40}")
 _HEX_QUANTITY: Final[re.Pattern[str]] = re.compile(r"0x[0-9a-fA-F]+")
 
 
@@ -91,7 +91,7 @@ class EtherscanAdapter:
             raise ValueError("etherscan api_url must not be blank")
         if not api_key.strip():
             raise ValueError("etherscan api_key must not be blank")
-        if _EVM_ADDRESS.fullmatch(contract_address.strip()) is None:
+        if EVM_ADDRESS.fullmatch(contract_address.strip()) is None:
             raise ValueError(f"not an EVM contract address: {contract_address!r}")
 
         self._client = client

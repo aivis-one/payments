@@ -116,6 +116,9 @@ def make_settings(**overrides: object) -> Settings:
     """
     values: dict[str, object] = {
         "DATABASE_URL": "postgresql+asyncpg://payments:payments@localhost:5432/payments",
+        # Mandatory since H3: Settings refuses to build without a token, and
+        # refuses wallet addresses that are not shaped like real ones.
+        "SERVICE_TOKEN": "test-token-not-real",
         "WALLET_ADDRESS_USDT_TRC20": TRON_WALLET,
         "WALLET_ADDRESS_USDT_ERC20": EVM_WALLET,
         "WALLET_ADDRESS_USDT_BSC20": EVM_WALLET,

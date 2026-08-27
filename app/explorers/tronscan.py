@@ -22,11 +22,11 @@ ordinary content answer and becomes ``not_found`` rather than an error.
 
 from __future__ import annotations
 
-import re
 from typing import Final
 
 import httpx
 
+from app.domain.addresses import TRON_ADDRESS
 from app.domain.statuses import Verdict
 from app.explorers.matching import Transfer, classify
 from app.explorers.protocol import ExplorerResult
@@ -35,11 +35,6 @@ from app.explorers.transport import ExplorerUnavailable, fetch_json
 #: ``TriggerSmartContract``. Any contract call, token or not.
 TRIGGER_SMART_CONTRACT: Final[int] = 31
 
-#: Shape smoke-check only -- length and leading ``T``. Deliberately not a
-#: base58 checksum validation: this guards against an empty or obviously
-#: wrong-chain value in config, and a half-implemented checksum would invite
-#: the next reader to trust it as one.
-_TRON_ADDRESS: Final[re.Pattern[str]] = re.compile(r"T[1-9A-HJ-NP-Za-km-z]{33}")
 
 
 def _raw_amount(entry: dict[str, object]) -> int:
@@ -86,7 +81,7 @@ class TronScanAdapter:
         """
         if not api_url.strip():
             raise ValueError("tronscan api_url must not be blank")
-        if _TRON_ADDRESS.fullmatch(contract_address.strip()) is None:
+        if TRON_ADDRESS.fullmatch(contract_address.strip()) is None:
             raise ValueError(f"not a TRON contract address: {contract_address!r}")
 
         self._client = client

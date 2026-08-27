@@ -2,7 +2,7 @@
 
 Three separate enums on purpose. They look similar and are not the same thing:
 a verdict is what the explorer layer concluded, an attempt record is what gets
-persisted, and only five of the seven verdicts ever become a row.
+persisted, and only four of the six verdicts ever become a row.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ TERMINAL_STATUSES: frozenset[InvoiceStatus] = frozenset(
 class Verdict(StrEnum):
     """What the explorer layer (H2) concluded about one submitted TXID.
 
-    Seven members. There is no member for "not found, but the internal retry
+    Six members. There is no member for "not found, but the internal retry
     window is not exhausted yet": the adapter contract is that the retry loop
     sits *above* the adapter and the adapter hands down a final verdict only.
     So ``NOT_FOUND`` here always means a real, spent user attempt.
@@ -60,7 +60,6 @@ class Verdict(StrEnum):
     MATCHED = "matched"
     NOT_FOUND = "not_found"
     WRONG_ADDRESS = "wrong_address"
-    WRONG_NETWORK = "wrong_network"
     ALREADY_USED = "already_used"
     API_ERROR = "api_error"
     INVALID_FORMAT = "invalid_format"
@@ -69,7 +68,7 @@ class Verdict(StrEnum):
 class AttemptResultCode(StrEnum):
     """Values that can actually appear in ``invoice_txid_attempts.result_code``.
 
-    Five, not seven. ``api_error`` never becomes a row at all (TOR section 4,
+    Four, not six. ``api_error`` never becomes a row at all (TOR section 4,
     "Важно"), and ``invalid_format`` is rejected by regex before the explorer
     is called, so it has no row either (TOR section 7). Both are therefore
     unreachable in this column and are not listed as members.
@@ -84,5 +83,4 @@ class AttemptResultCode(StrEnum):
     MATCHED = "matched"
     NOT_FOUND = "not_found"
     WRONG_ADDRESS = "wrong_address"
-    WRONG_NETWORK = "wrong_network"
     ALREADY_USED = "already_used"

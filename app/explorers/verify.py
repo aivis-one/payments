@@ -13,10 +13,11 @@ matters more than it looks:
 3. The retry series runs on top and yields the final verdict.
 
 A TXID shaped for another network is ``invalid_format`` and costs nothing.
-Calling it ``wrong_network`` would spend a user attempt on a classification
-the TOR does not define and on a trip to the explorer that never happened --
-and the person who pays for that mistake three times has an invoice locked
-against the money they may already have sent on the other chain.
+Charging an attempt for it would be charging for a trip to the explorer that
+never happened, against the rule of TOR section 7 that only TXIDs reaching the
+explorer count -- and the person who makes that mistake three times ends up
+with a locked invoice, quite possibly having already sent the money on the
+other chain.
 """
 
 from __future__ import annotations

@@ -26,10 +26,15 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://payments:payments@localhost:5432/payments
       # Mandatory settings have no defaults; CI supplies throwaway values.
-      WALLET_ADDRESS_USDT_TRC20: TCiTestTronAddressForCiOnly000000000
+      # A real TRON address from a block explorer. The previous throwaway
+      # value was 36 characters and contained 0, O and l, none of which
+      # exist in base58 -- it could never be a TRON address, and config
+      # validation now refuses it.
+      WALLET_ADDRESS_USDT_TRC20: TMuA6YqfCeX8EhbfYEg5y7S4DqzSJireY9
       WALLET_ADDRESS_USDT_ERC20: "0x0000000000000000000000000000000000000001"
       WALLET_ADDRESS_USDT_BSC20: "0x0000000000000000000000000000000000000002"
       ETHERSCAN_API_KEY: ci-not-a-real-key
+      SERVICE_TOKEN: ci-not-a-real-token
       # Turns "no database configured" from a silent skip into a failure, so a
       # green run cannot mean the database tests quietly did not execute.
       PAYMENTS_TESTS_REQUIRE_DB: "1"

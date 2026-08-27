@@ -54,7 +54,6 @@ _ATTEMPT_RECORD_BY_VERDICT: dict[Verdict, AttemptResultCode] = {
     Verdict.MATCHED: AttemptResultCode.MATCHED,
     Verdict.NOT_FOUND: AttemptResultCode.NOT_FOUND,
     Verdict.WRONG_ADDRESS: AttemptResultCode.WRONG_ADDRESS,
-    Verdict.WRONG_NETWORK: AttemptResultCode.WRONG_NETWORK,
     Verdict.ALREADY_USED: AttemptResultCode.ALREADY_USED,
 }
 
@@ -285,7 +284,6 @@ def _on_verdict(
         case (
             Verdict.NOT_FOUND
             | Verdict.WRONG_ADDRESS
-            | Verdict.WRONG_NETWORK
             | Verdict.ALREADY_USED
         ):
             # Increment first, then compare -- and compare with >=, not ==.
