@@ -414,3 +414,53 @@ async def test_a_concurrent_duplicate_never_answers_500(
             )
         )
     assert matched == 1
+
+
+# ==========================================================================
+# P-24: the connection is not held across the explorer call
+# ==========================================================================
+
+
+async def test_no_transaction_is_open_while_the_explorer_is_being_called(
+    session: AsyncSession,
+) -> None:
+    """P-24, the half that needs a real transaction.
+
+    ``test_routes`` proves the rollback was called; this proves the call gives
+    the property it was made for. A stub session can report anything about
+    itself, so "we rolled back" is only evidence next to a real session saying
+    it is no longer in a transaction.
+
+    The previous behaviour was not a lock -- the route takes none -- but a
+    pooled connection sitting ``idle in transaction`` for the seven seconds the
+    retry series can take, which caps concurrent submissions at the size of the
+    pool.
+    """
+    invoice = await make_invoice(session)
+    open_transactions: list[bool] = []
+
+    def note(_request: httpx.Request) -> httpx.Response:
+        open_transactions.append(session.in_transaction())
+        return json_response(load("etherscan_erc20_single"))
+
+    explorer = httpx.AsyncClient(transport=httpx.MockTransport(note))
+    settings = make_settings()
+    app.dependency_overrides[settings_dependency] = lambda: settings
+    app.dependency_overrides[get_session] = lambda: session
+    app.dependency_overrides[explorer_client] = lambda: explorer
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as http:
+        response = await http.post(
+            f"/api/v1/invoices/{invoice.id}/txid", json={"txid": EVM_TXID}, headers=AUTH
+        )
+
+    assert response.status_code == 200
+    assert open_transactions == [False]
+
+    # The write still happens afterwards: releasing the transaction must not
+    # cost the persistence it was wrapped around.
+    await session.refresh(invoice)
+    assert invoice.status == "awaiting_confirmations"
+    assert invoice.attempts_used == 1

@@ -96,6 +96,8 @@ def _settings() -> Settings:
         WALLET_ADDRESS_USDT_BSC20="0x0000000000000000000000000000000000000002",
         ETHERSCAN_API_KEY="key",
         TRONSCAN_API_KEY="key",
+        PRODUCT_WEBHOOK_URL="http://product.invalid/webhooks/payments",
+        PAYMENTS_WEBHOOK_SECRET="secret",
     )
 
 

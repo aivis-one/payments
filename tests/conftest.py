@@ -119,7 +119,7 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     async with factory() as s:
         from sqlalchemy import text
 
-        await s.execute(text("truncate invoice_txid_attempts, invoices cascade"))
+        await s.execute(text("truncate outbox_events, invoice_txid_attempts, invoices cascade"))
         await s.commit()
         yield s
 
@@ -131,6 +131,7 @@ NO_NETWORK_FAMILIES: tuple[str, ...] = (
     "test_explorers_*.py",
     "test_routes*.py",
     "test_worker*.py",
+    "test_outbox*.py",
 )
 
 #: The two markers, weakest first.

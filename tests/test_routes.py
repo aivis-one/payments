@@ -50,7 +50,9 @@ class StubSession:
     def __init__(self, rows: dict[uuid.UUID, Invoice] | None = None) -> None:
         self.rows = rows or {}
         self.commits = 0
+        self.rollbacks = 0
         self.added: list[object] = []
+        self.executed: list[object] = []
 
     async def get(self, _model: object, key: uuid.UUID) -> Invoice | None:
         return self.rows.get(key)
@@ -71,6 +73,20 @@ class StubSession:
 
     async def refresh(self, _obj: object) -> None:
         return None
+
+    async def rollback(self) -> None:
+        # Counted rather than ignored: the route releases the connection
+        # before the explorer call, and "it was released" is only half the
+        # claim. The other half -- that releasing it gives the property --
+        # needs a real transaction and lives in test_routes_db.
+        self.rollbacks += 1
+
+    async def execute(self, statement: object, *_args: object, **_kw: object) -> None:
+        # Recorded, not refused: publishing an event is a Core INSERT, and a
+        # route that enters a published status now issues one. What the row
+        # contains is settled against a real database in test_outbox_db; here
+        # the only claim is that the route reached for it at all.
+        self.executed.append(statement)
 
     async def scalar(self, *_args: object, **_kw: object) -> Any:
         raise AssertionError("a query was executed by a test that claims not to need one")
@@ -470,6 +486,60 @@ async def test_an_api_error_from_the_explorer_costs_nothing():
     assert body["attempts_used"] == 0
     assert body["attempts_remaining"] == 3
     assert session.commits == 0
+
+
+async def test_the_transaction_is_released_before_the_explorer_is_called():
+    """P-24, the half that does not need a database.
+
+    The retry series takes up to seven seconds, and a pooled connection held
+    across it sits idle in transaction for the whole window -- which caps
+    concurrent submissions at the size of the pool. The route now releases it
+    first, exactly as the confirmations worker does.
+
+    This half proves the call was made and that it came before the explorer was
+    reached. It cannot prove the call had the effect it is supposed to have:
+    that needs a real transaction and lives in ``test_routes_db``. Either half
+    alone would go green on something broken.
+    """
+    row = invoice()
+    session = StubSession({row.id: row})
+    rollbacks_when_the_explorer_answered: list[int] = []
+
+    def note(_request: httpx.Request) -> httpx.Response:
+        rollbacks_when_the_explorer_answered.append(session.rollbacks)
+        # An answer the explorer layer turns into api_error: it keeps this test
+        # on the question it is about, with no attempt row and no savepoint.
+        return json_response({}, status_code=500)
+
+    transport = httpx.MockTransport(note)
+
+    async with client_for(session, transport) as http:  # type: ignore[arg-type]
+        await http.post(
+            f"/api/v1/invoices/{row.id}/txid", json={"txid": EVM_TXID}, headers=AUTH
+        )
+
+    assert rollbacks_when_the_explorer_answered
+    assert set(rollbacks_when_the_explorer_answered) == {1}
+
+
+async def test_a_refusal_reaches_no_explorer_and_so_releases_nothing():
+    """The paired negative: the release belongs to the path that has a call.
+
+    A refusal commits and answers without ever leaving the process, so a
+    rollback there would be a transaction thrown away for nothing. Without this
+    test, a rollback moved to the top of the handler would satisfy the previous
+    one just as well.
+    """
+    row = invoice(ttl_minutes=-1)
+    session = StubSession({row.id: row})
+
+    async with client_for(session) as http:
+        response = await http.post(
+            f"/api/v1/invoices/{row.id}/txid", json={"txid": EVM_TXID}, headers=AUTH
+        )
+
+    assert response.status_code == 409
+    assert session.rollbacks == 0
 
 
 # ==========================================================================

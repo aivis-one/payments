@@ -1,6 +1,6 @@
 """The background process: confirmations worker, then sweeper, in one loop.
 
-**One process, two phases, worker first.** The two could have been separate
+**One process, three phases, worker first.** The two could have been separate
 services, and the cheap argument for merging them is that H6 then has one entry
 in its compose file instead of two. The real argument is ordering. Both phases
 can write the same invoice row -- the worker moves it to ``confirmed``, the
@@ -9,9 +9,9 @@ them gets there first a property of this file rather than of whatever the
 scheduler felt like doing. TOR section 11 p.10 prefers ``confirmed``, so the
 worker runs first.
 
-**Nothing here emits events.** The transitions are produced, the outbox and the
-outgoing webhook are H5. A status reaching ``confirmed`` in the database with
-nobody told about it yet is the intended intermediate state, not a gap.
+**Both phases that change a status also publish its event**, in the same
+transaction as the status, and a third phase delivers what has been published.
+Three phases, one process, one entry in the deploy contract.
 
 **Two-writer safety, three mechanisms, each doing a different job.**
 
@@ -38,8 +38,9 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.config import Settings, get_settings
 from app.db import get_session_factory
@@ -48,6 +49,7 @@ from app.domain.statuses import InvoiceStatus
 from app.domain.transitions import Decision, decide
 from app.explorers.registry import spec_for
 from app.models import Invoice
+from app.outbox import deliver_once, publish
 
 log = logging.getLogger("payments.worker")
 
@@ -58,12 +60,44 @@ log = logging.getLogger("payments.worker")
 #: persisted, which is here.
 BIGINT_MAX: int = 2**63 - 1
 
-#: Statuses the sweeper can move by the clock alone.
-SWEEPABLE: tuple[str, ...] = (
+#: Statuses whose only deadline is the invoice TTL.
+TTL_STATUSES: tuple[str, ...] = (
     InvoiceStatus.CREATED.value,
     InvoiceStatus.ATTEMPTS_EXHAUSTED.value,
-    InvoiceStatus.AWAITING_CONFIRMATIONS.value,
 )
+
+
+def sweepable_clause(now: datetime, settings: Settings) -> ColumnElement[bool]:
+    """Rows the clock alone can move, as a WHERE clause.
+
+    **This is a second copy of the thresholds in ``_resolve_by_time``, and that
+    is a decision rather than an oversight.** The sweeper used to select on
+    status alone and take the first ``WORKER_BATCH_SIZE`` rows it found; since
+    ``awaiting_confirmations`` sits in that set for up to seven days, a batch
+    could fill with rows that cannot move and no invoice would ever reach
+    ``expired`` -- the sweeper is the upper bound on the delay of every terminal
+    event, and it bounded nothing under load. Selecting only movable rows fixes
+    that, and it cannot be done without naming the deadlines in SQL.
+
+    The cost is a second source for those deadlines: change the domain rule --
+    a per-network observation window, say -- and this clause would quietly stop
+    feeding it rows. That is what the equality test in ``tests/test_worker_db``
+    is for. It compares this selection against what ``decide`` actually moves,
+    so the divergence is a red run on the day it appears rather than events
+    that stop arriving.
+
+    ``sweep_once`` builds its WHERE from this function and not from a copy of
+    it, or the test would be comparing a function to the domain while the real
+    query went unchecked.
+    """
+    window = timedelta(days=settings.MAX_OBSERVATION_WINDOW_DAYS)
+    return or_(
+        and_(Invoice.status.in_(TTL_STATUSES), Invoice.expires_at <= now),
+        and_(
+            Invoice.status == InvoiceStatus.AWAITING_CONFIRMATIONS.value,
+            Invoice.slot_frozen_at <= now - window,
+        ),
+    )
 
 
 def _now() -> datetime:
@@ -222,6 +256,7 @@ async def _persist(
         await session.commit()
         return None
 
+    previous = InvoiceStatus(invoice.status)
     invoice.confirmations_seen = confirmations
     invoice.last_checked_at = now
     invoice.status = decision.next_status.value
@@ -233,8 +268,11 @@ async def _persist(
         age = now - invoice.slot_frozen_at if invoice.slot_frozen_at else timedelta(0)
         invoice.next_check_at = now + poll_interval(age, settings)
 
-    # Status and bookkeeping in one transaction, which is what makes "wrote the
-    # status but not last_checked_at" an unreachable state rather than a branch
+    await publish(session, invoice, previous=previous, occurred_at=now)
+
+    # Status, bookkeeping and event in one transaction, which is what makes
+    # "wrote the status but not last_checked_at" -- or "confirmed the invoice
+    # but never told the product" -- unreachable states rather than branches
     # somebody has to handle after a restart.
     await session.commit()
     return decision
@@ -257,10 +295,28 @@ async def _reschedule(
 async def poll_once(
     session: AsyncSession, settings: Settings, client: httpx.AsyncClient
 ) -> int:
-    """One worker phase. Returns how many invoices were looked at."""
+    """One worker phase. Returns how many invoices were looked at.
+
+    The guard is per invoice, not per phase. ``spec_for`` raises on a network
+    that has been withdrawn from the adapter registry, which is an operational
+    act rather than a corrupted row, and one invoice on such a network used to
+    end the batch for every other invoice in it.
+
+    The rollback in front of the log is load-bearing: an exception raised
+    inside a database call leaves the session dirty, and the remaining rows
+    would then fail on the poisoned transaction rather than on themselves --
+    a guard that looks placed and is not.
+
+    The claimed row is left alone. Its lease expires on its own and brings it
+    back, which is the same recovery path as a process that died mid-poll.
+    """
     claimed = await claim_due(session, settings, _now())
     for invoice_id in claimed:
-        await observe_one(session, settings, client, invoice_id)
+        try:
+            await observe_one(session, settings, client, invoice_id)
+        except Exception:
+            await session.rollback()
+            log.exception("invoice %s could not be observed", invoice_id)
     return len(claimed)
 
 
@@ -274,12 +330,21 @@ async def sweep_once(session: AsyncSession, settings: Settings) -> int:
     happened, and H5 has nothing to send until it has.
 
     No explorer is involved: the sweeper asks the clock, not the chain.
+
+    **The per-row guard covers the pure part and says so.** ``policy_for`` and
+    ``InvoiceSnapshot`` both raise ``ValueError`` on rows that are perfectly
+    ordinary to select: a network withdrawn from config while its invoices are
+    still open, or a row edited by hand into a shape the domain forbids. One
+    such row used to end the whole phase. A failure from the database is a
+    different matter and still loses the batch -- nothing has been committed at
+    that point, so nothing is inconsistent and the next tick tries again, but
+    the guard should not be read as covering it.
     """
     now = _now()
     invoices = (
         await session.scalars(
             select(Invoice)
-            .where(Invoice.status.in_(SWEEPABLE))
+            .where(sweepable_clause(now, settings))
             .limit(settings.WORKER_BATCH_SIZE)
             .with_for_update(skip_locked=True)
         )
@@ -287,11 +352,54 @@ async def sweep_once(session: AsyncSession, settings: Settings) -> int:
 
     moved = 0
     for invoice in invoices:
-        decision = decide(
-            snapshot_of(invoice), TimeChecked(), now, settings.policy_for(invoice.network)
-        )
+        try:
+            decision = decide(
+                snapshot_of(invoice), TimeChecked(), now, settings.policy_for(invoice.network)
+            )
+        except ValueError:
+            # UnknownNetworkError is one of these. Skip the row, keep the batch.
+            #
+            # KNOWN CEILING -- a row the sweeper cannot read holds a slot of the
+            # batch for as long as it stays unreadable.
+            #
+            # Mechanics: the predicate selects the row because its deadline has
+            # passed, this guard declines to move it, and nothing changes, so
+            # the next pass selects it again. It occupies one slot of
+            # WORKER_BATCH_SIZE permanently; k such rows cost k slots, and at k
+            # equal to the batch size the starvation of P-23 is back through a
+            # different door.
+            #
+            # Status: acknowledged by design.
+            #
+            # Task: P-27, which shares its fix with P-26.
+            #
+            # Unfreezing trigger: two observable conditions, and the second
+            # outlives the fix. First, a network withdrawn from config or from
+            # the adapter registry while its invoices are still open. Second,
+            # and after P-26 as well: the sweeper moves nothing while its
+            # selection is not empty.
+            #
+            # Agreed fix: snapshot the policy onto the invoice at creation, the
+            # way the address already is, so that no later touch resolves the
+            # network at all. Explicitly partial -- it removes the operational
+            # cause and not the other one: a row edited by hand into a shape
+            # InvoiceSnapshot refuses (a negative attempts_used, an
+            # awaiting_confirmations row with no active_txid) stays unreadable
+            # and keeps its slot. That remainder is bounded and known, and a
+            # marker promising a complete close would be the same kind of lie
+            # the submit_txid docstring told before P-24.
+            #
+            # Rejected: a commit per row, which trades a known harmless failure
+            # for fifty transactions a pass forever; a marker column or an
+            # excluded-id set, which route around the remainder without
+            # removing its cause, and cost a migration to do it.
+            log.exception("invoice %s cannot be resolved by the sweeper", invoice.id)
+            continue
+
         if decision.next_status.value != invoice.status:
+            previous = InvoiceStatus(invoice.status)
             invoice.status = decision.next_status.value
+            await publish(session, invoice, previous=previous, occurred_at=now)
             moved += 1
     await session.commit()
     return moved
@@ -301,29 +409,52 @@ async def tick(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     client: httpx.AsyncClient,
-) -> tuple[int, int]:
-    """One full cycle: worker phase, then sweeper phase. Returns both counts."""
+    webhook_client: httpx.AsyncClient,
+) -> tuple[int, int, int]:
+    """One full cycle: worker, sweeper, delivery. Returns all three counts.
+
+    Delivery is last so that events published by the two phases above leave in
+    the same tick that produced them instead of waiting for the next one. The
+    price is that delivery waits behind a batch of explorer calls -- up to
+    seven seconds each -- so an event can be minutes late under load. Late is
+    the failure this design accepts; lost is the one it does not.
+    """
     async with session_factory() as session:
         polled = await poll_once(session, settings, client)
     async with session_factory() as session:
         swept = await sweep_once(session, settings)
-    return polled, swept
+    async with session_factory() as session:
+        delivered = await deliver_once(session, settings, webhook_client)
+    return polled, swept, delivered
 
 
 async def run() -> None:  # pragma: no cover - the loop itself is not unit-tested
-    """Run ticks forever."""
+    """Run ticks forever.
+
+    Two HTTP clients, not one. The explorer client is pooled and tuned for
+    third-party APIs the service does not trust; the webhook client talks to the
+    product over the internal network with its own timeout. Sharing one would
+    mix two trust boundaries in one connection pool, and would leave the
+    ``no_explorer`` marker in the tests ambiguous about which traffic it guards.
+    """
     settings = get_settings()
     factory = get_session_factory()
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient() as client, httpx.AsyncClient() as webhook_client:
         while True:
             try:
-                polled, swept = await tick(factory, settings, client)
-                if polled or swept:
-                    log.info("tick: polled=%d swept=%d", polled, swept)
+                polled, swept, delivered = await tick(factory, settings, client, webhook_client)
+                if polled or swept or delivered:
+                    log.info(
+                        "tick: polled=%d swept=%d delivered=%d", polled, swept, delivered
+                    )
             except Exception:
                 # One bad tick must not end the process: the next one may well
                 # succeed, and a worker that exits on the first transient
                 # failure stops every invoice rather than one.
+                #
+                # This is the outermost net only. Each of the three phases now
+                # guards its own rows, so reaching here means the phase itself
+                # failed, not one invoice in it.
                 log.exception("tick failed")
             await asyncio.sleep(settings.WORKER_TICK_SECONDS)
 

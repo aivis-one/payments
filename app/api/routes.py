@@ -47,6 +47,7 @@ from app.domain.transitions import Decision, decide
 from app.explorers.registry import spec_for
 from app.explorers.verify import verify_txid
 from app.models import Invoice, InvoiceTxidAttempt
+from app.outbox import publish
 
 router = APIRouter(prefix="/api/v1", dependencies=[AuthDep])
 
@@ -92,6 +93,27 @@ def _apply(invoice: Invoice, decision: Decision) -> None:
         invoice.credited_amount_cents = effects.credited_amount_cents
     if effects.underpaid is not None:
         invoice.underpaid = effects.underpaid
+
+
+async def _persist_decision(
+    session: AsyncSession, invoice: Invoice, decision: Decision, occurred_at: datetime
+) -> None:
+    """Write a decision and, in the same transaction, the event it produces.
+
+    Every write of a status in this module goes through here, so that "the
+    status changed" and "the product will be told" cannot come apart. One
+    transaction is what makes the pair unloseable: either both rows are there
+    after a crash, or neither is.
+
+    The previous status is read before ``_apply`` overwrites it, because the
+    event is owed on *entering* a status, not on writing one. A refusal writes
+    the status it refused with -- ``confirmed`` over ``confirmed`` -- and that
+    is not a transition and owes nobody anything.
+    """
+    previous = InvoiceStatus(invoice.status)
+    _apply(invoice, decision)
+    await publish(session, invoice, previous=previous, occurred_at=occurred_at)
+    await session.commit()
 
 
 async def _load(session: AsyncSession, invoice_id: uuid.UUID) -> Invoice:
@@ -205,17 +227,38 @@ async def submit_txid(
 ) -> TxidResult:
     """Admit, look up, persist, answer.
 
-    The snapshot is taken once, at admission, and the same one is handed to the
-    verdict event. It is deliberately not re-read after the explorer call and
-    the row is not locked: concurrency is arbitrated by the INSERT against the
-    partial unique index, so a lock on the invoice would add contention without
+    **The decision is made from the admission snapshot, and the row is never
+    locked.** Concurrency is arbitrated by the INSERT against the partial
+    unique index, so a lock on the invoice would add contention without
     removing the ``IntegrityError`` handling that is needed anyway.
+
+    **The database transaction is released before the explorer call and the row
+    is re-read afterwards.** The retry series is up to four calls with 1/2/4
+    second pauses -- about seven seconds -- and a pooled connection held across
+    that window sits ``idle in transaction`` for the whole of it, which caps
+    concurrent submissions at the size of the pool. The previous version of
+    this docstring claimed the call happened outside every transaction; it did
+    not, because ``session.get`` opens one and nothing closed it.
+
+    The re-read is not optional once the transaction is released: a rollback
+    expires every object loaded in it, and touching an expired attribute
+    afterwards attempts IO from a synchronous context. It is also not a second
+    look at the state -- the decision above already used the admission
+    snapshot, exactly as before. What it changes is arithmetic: the attempt
+    counter is now incremented from the freshly read value, so two concurrent
+    submissions of two *different* hashes cost two attempts rather than one.
+    They used to cost one, because both read zero and both wrote one.
     """
     invoice = await _load(session, invoice_id)
     policy = settings.policy_for(invoice.network)
     snapshot = _snapshot(invoice)
+    # Read out before the transaction is released; after it, the loaded
+    # instance is expired and every attribute is a database round trip.
+    network = invoice.network
+    wallet_address = invoice.address
 
-    admission = decide(snapshot, TxidAdmission(txid=body.txid), _now(), policy)
+    admitted_at = _now()
+    admission = decide(snapshot, TxidAdmission(txid=body.txid), admitted_at, policy)
 
     if admission.idempotent_replay:
         # The slot is already held by this very TXID. Answering 409
@@ -228,21 +271,33 @@ async def submit_txid(
         # awaiting_confirmations -> stalled, or an attempts budget that shrank
         # under a live invoice). Persist it before answering, or the invoice
         # stays wrong until something else touches it.
-        _apply(invoice, admission)
-        await session.commit()
+        await _persist_decision(session, invoice, admission, admitted_at)
         raise refusal(admission.refused_by) if admission.refused_by else AssertionError
 
+    # The reads above hold nothing across the call.
+    await session.rollback()
+
     result = await verify_txid(
-        network=invoice.network,
+        network=network,
         txid=body.txid,
-        wallet_address=invoice.address,
+        wallet_address=wallet_address,
         settings=settings,
         client=client,
     )
 
+    # Re-attach. ``_load`` rather than a bare ``get`` so that a row that
+    # disappeared under us is answered 404 by the same helper as everywhere
+    # else, instead of growing a branch of its own.
+    invoice = await _load(session, invoice_id)
+
     # Fresh clock: up to seven seconds of retry can have passed, and
-    # slot_frozen_at should record when the slot was actually taken.
-    decision = decide(snapshot, TxidVerdict(verdict=result.verdict, txid=body.txid), _now(), policy)
+    # slot_frozen_at should record when the slot was actually taken. The same
+    # moment is what the event carries: occurred_at is the time of the
+    # transition, never the time of its delivery.
+    decided_at = _now()
+    decision = decide(
+        snapshot, TxidVerdict(verdict=result.verdict, txid=body.txid), decided_at, policy
+    )
 
     if decision.attempt_record is None:
         # api_error and invalid_format: no row, no attempt, no status change.
@@ -252,10 +307,11 @@ async def submit_txid(
         session, invoice, body.txid, decision.attempt_record, result.from_address
     )
     if not inserted:
-        return await _on_collision(session, settings, invoice, snapshot, body.txid, policy)
+        return await _on_collision(
+            session, settings, invoice, snapshot, body.txid, policy, decided_at
+        )
 
-    _apply(invoice, decision)
-    await session.commit()
+    await _persist_decision(session, invoice, decision, decided_at)
     return _result(settings, invoice, decision, result.verdict)
 
 
@@ -299,6 +355,7 @@ async def _on_collision(
     snapshot: InvoiceSnapshot,
     txid: str,
     policy: Policy,
+    decided_at: datetime,
 ) -> TxidResult:
     """Somebody else already holds a matched row for this ``(network, txid)``.
 
@@ -326,15 +383,14 @@ async def _on_collision(
     already_used = decide(
         snapshot,
         TxidVerdict(verdict=Verdict.ALREADY_USED, txid=txid),
-        _now(),
+        decided_at,
         policy,
     )
     assert already_used.attempt_record is not None
     await _insert_attempt(
         session, invoice, txid, already_used.attempt_record, from_address=None
     )
-    _apply(invoice, already_used)
-    await session.commit()
+    await _persist_decision(session, invoice, already_used, decided_at)
     return _result(settings, invoice, already_used, Verdict.ALREADY_USED)
 
 

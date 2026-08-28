@@ -36,6 +36,10 @@ jobs:
       ETHERSCAN_API_KEY: ci-not-a-real-key
       TRONSCAN_API_KEY: ci-not-a-real-key
       SERVICE_TOKEN: ci-not-a-real-token
+      PAYMENTS_WEBHOOK_SECRET: ci-not-a-real-secret
+      # .invalid is reserved and resolves nowhere, so a test that slipped past
+      # the network trap fails instead of reaching a live host.
+      PRODUCT_WEBHOOK_URL: http://product.invalid/webhooks/payments
       # Turns "no database configured" from a silent skip into a failure, so a
       # green run cannot mean the database tests quietly did not execute.
       PAYMENTS_TESTS_REQUIRE_DB: "1"

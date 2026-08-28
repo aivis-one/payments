@@ -101,6 +101,31 @@ class Settings(BaseSettings):
     # not. No default: an absent key must stop the process, not degrade it.
     TRONSCAN_API_KEY: str
 
+    # Outgoing webhook (TOR sections 8 and 10). Both mandatory, no defaults,
+    # both validated below: a blank secret is the fail-closed case of section 8
+    # and a blank URL is an outbox that fills up and never empties.
+    PRODUCT_WEBHOOK_URL: str
+    PAYMENTS_WEBHOOK_SECRET: str
+
+    # Delivery schedule. TOR section 10 lists only WEBHOOK_MAX_ATTEMPTS, and
+    # leaves its value to this delivery.
+    #
+    # Twelve attempts on a 5s..1h doubling schedule is about two and a half
+    # hours of trying before a row is given up on -- eleven waits, not twelve,
+    # which is an hour less than it looks. Ten would be forty minutes,
+    # which is shorter than an ordinary deployment of the product -- and the
+    # thing being given up on can be a confirmed payment the product never
+    # hears about, so the error has to lean towards late rather than lost.
+    WEBHOOK_MAX_ATTEMPTS: int = 12
+    WEBHOOK_BACKOFF_MIN_SECONDS: float = 5.0
+    WEBHOOK_BACKOFF_MAX_SECONDS: float = 3600.0
+    WEBHOOK_TIMEOUT_SECONDS: float = 10.0
+
+    # How long a claimed event stays invisible to other delivery loops.
+    # Generous against the timeout above, short enough that a process killed
+    # mid-POST strands its event for a minute rather than an hour.
+    WEBHOOK_LEASE_SECONDS: float = 60.0
+
     # USDT contracts. Decimals are per-network and are NOT derivable from one
     # formula: Binance-Peg BSC-USD carries 18 decimals, not 6 (TOR section 6b).
     USDT_CONTRACT_ERC20: str = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
@@ -154,6 +179,21 @@ class Settings(BaseSettings):
         ]
         if malformed:
             raise ValueError(f"not usable wallet addresses: {', '.join(malformed)}")
+
+        # The webhook secret is the same failure as the token, in the other
+        # direction: TOR section 8 has the receiver reject a blank header, and
+        # ``compare_digest("", "")`` is true, so a blank secret here would send
+        # a blank header that a receiver without that guard would accept.
+        if not self.PAYMENTS_WEBHOOK_SECRET.strip():
+            raise ValueError("PAYMENTS_WEBHOOK_SECRET must not be blank")
+
+        # Format, not just emptiness, for the same reason as the addresses: a
+        # URL without a scheme is accepted by nothing, and the service would
+        # only find that out one event at a time, hours later, as rows reach
+        # ``failed``.
+        url = self.PRODUCT_WEBHOOK_URL.strip()
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("PRODUCT_WEBHOOK_URL must be an http(s) URL")
 
         return self
 

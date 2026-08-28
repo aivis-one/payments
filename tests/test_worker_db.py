@@ -21,14 +21,25 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import explorer_client, settings_dependency
 from app.db import get_session
+from app.domain.events import TimeChecked
 from app.domain.statuses import InvoiceStatus
+from app.domain.transitions import decide
 from app.main import app
-from app.models import Invoice
-from app.worker import claim_due, observe_one, poll_once, sweep_once, tick
+from app.models import Invoice, OutboxEvent
+from app.worker import (
+    claim_due,
+    observe_one,
+    poll_once,
+    snapshot_of,
+    sweep_once,
+    sweepable_clause,
+    tick,
+)
 from tests.explorers_support import (
     EVM_TXID,
     EVM_WALLET,
@@ -37,6 +48,7 @@ from tests.explorers_support import (
     load,
     make_settings,
 )
+from tests.outbox_support import accepting_webhooks
 
 pytestmark = pytest.mark.no_explorer
 
@@ -520,26 +532,162 @@ async def test_the_sweeper_never_touches_a_terminal_invoice(
 
 
 async def test_a_tick_runs_the_worker_before_the_sweeper(engine) -> None:
-    """One process, two phases, and the order is what settles the tie.
+    """One process, three phases, and the order is what settles the tie.
 
     An invoice whose window has elapsed and whose transaction is confirmed is
-    due for both phases. Running the worker first makes ``confirmed`` the
-    outcome by construction rather than by whatever the scheduler chose.
+    due for both of the first two phases. Running the worker first makes
+    ``confirmed`` the outcome by construction rather than by whatever the
+    scheduler chose.
+
+    The old form of this test unpacked two counts and asserted the order of two
+    phases. Both claims were right and both survive; what changed is that a
+    third phase now runs after them, and the event the worker just published
+    leaves in the same tick rather than waiting for the next one. Asserting the
+    delivery count here is what makes "delivery is last" a checked property
+    instead of a comment.
     """
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as setup:
         invoice = await make_invoice(setup, frozen_minutes_ago=8 * 24 * 60)
         invoice_id = invoice.id
 
-    async with deep_client() as client:
-        polled, swept = await tick(factory, settings(), client)
+    async with deep_client() as client, accepting_webhooks() as webhooks:
+        polled, swept, delivered = await tick(factory, settings(), client, webhooks)
 
     async with factory() as check:
         row = await check.get(Invoice, invoice_id)
         assert row is not None
         assert row.status == "confirmed"
+        event = await check.scalar(
+            select(OutboxEvent).where(OutboxEvent.invoice_id == invoice_id)
+        )
+        assert event is not None
+        assert event.delivery_state == "delivered"
     assert polled == 1
     assert swept == 0
+    assert delivered == 1
+
+
+# ==========================================================================
+# P-23: what the sweeper selects, and why it is allowed to name deadlines
+# ==========================================================================
+
+
+async def test_the_sweeper_selects_exactly_what_the_domain_would_move(session: AsyncSession):
+    """The pin under a deliberate duplication.
+
+    ``sweepable_clause`` restates two deadlines that already live in
+    ``_resolve_by_time``: the invoice TTL, and the observation window. Naming
+    them in SQL is what lets the sweeper select only rows it can move, and
+    without that its batch used to fill with invoices that cannot move at all.
+    The price is a second source for those deadlines, and this is the test that
+    was bought with it -- the day the domain rule changes and the clause does
+    not, the two sets diverge and this goes red, instead of terminal events
+    quietly ceasing to arrive.
+
+    The status space is walked from ``InvoiceStatus`` rather than from a list
+    written here. A seventh status would then arrive as a failure demanding a
+    decision, rather than as a member that silently belongs to neither set.
+    """
+    conf = settings()
+    now = datetime.now(UTC)
+    built: list[Invoice] = []
+    for status in InvoiceStatus:
+        # Both sides of whichever deadline the status has. For the three that
+        # have none, the two rows are simply two rows.
+        built.append(await make_invoice(session, status=status, ttl_minutes=-1))
+        built.append(
+            await make_invoice(
+                session, status=status, ttl_minutes=60, frozen_minutes_ago=8 * 24 * 60
+            )
+        )
+
+    selected = set(
+        (await session.scalars(select(Invoice.id).where(sweepable_clause(now, conf)))).all()
+    )
+    movable = {
+        invoice.id
+        for invoice in built
+        if decide(
+            snapshot_of(invoice), TimeChecked(), now, conf.policy_for(invoice.network)
+        ).next_status.value
+        != invoice.status
+    }
+
+    assert selected == movable
+    # Guards the test itself: an empty comparison would pass while proving
+    # nothing about either side.
+    assert movable
+
+
+async def test_long_lived_slots_no_longer_starve_the_sweeper(session: AsyncSession):
+    """P-23, the defect itself.
+
+    ``awaiting_confirmations`` sits in the sweepable set for up to seven days.
+    The old selection took the first ``WORKER_BATCH_SIZE`` rows of that set
+    regardless of whether they could move, so a batch's worth of slow payments
+    occupied it permanently and no invoice ever reached ``expired``. The
+    sweeper is what bounds the delay of every terminal event from above, so
+    under load it bounded nothing and the product heard nothing.
+
+    A batch of one makes the arithmetic exact rather than approximate.
+    """
+    small = make_settings(WORKER_BATCH_SIZE=1)
+    waiting = await make_invoice(session, frozen_minutes_ago=1)
+    overdue = await make_invoice(session, status=InvoiceStatus.CREATED, ttl_minutes=-1)
+
+    moved = await sweep_once(session, small)
+
+    await session.refresh(waiting)
+    await session.refresh(overdue)
+    assert moved == 1
+    assert overdue.status == "expired"
+    assert waiting.status == "awaiting_confirmations"
+
+
+# ==========================================================================
+# P-25: one unreadable row must not end a phase
+# ==========================================================================
+
+
+async def test_a_withdrawn_network_does_not_end_the_sweep(session: AsyncSession):
+    """The trigger is operational, not a corrupted row.
+
+    ``policy_for`` resolves the network on every touch, while the network is
+    only validated when the invoice is created. Withdrawing a network from
+    config while its invoices are still open is an ordinary act, and it used to
+    end the whole sweeper phase on the first such row.
+
+    The claim is that the *rest of the batch* was processed. "No exception
+    escaped" would pass on a guard that swallowed everything.
+    """
+    retired = await make_invoice(session, status=InvoiceStatus.CREATED, ttl_minutes=-1)
+    retired.network = "USDT-RETIRED"
+    healthy = await make_invoice(session, status=InvoiceStatus.CREATED, ttl_minutes=-1)
+    await session.commit()
+
+    moved = await sweep_once(session, settings())
+
+    await session.refresh(retired)
+    await session.refresh(healthy)
+    assert moved == 1
+    assert healthy.status == "expired"
+    assert retired.status == "created"
+
+
+async def test_a_withdrawn_network_does_not_end_the_worker_phase(session: AsyncSession):
+    """The same class, in the phase above. ``spec_for`` raises, not ``policy_for``."""
+    retired = await make_invoice(session)
+    retired.network = "USDT-RETIRED"
+    healthy = await make_invoice(session)
+    await session.commit()
+
+    async with deep_client() as client:
+        looked_at = await poll_once(session, settings(), client)
+
+    await session.refresh(healthy)
+    assert looked_at == 2
+    assert healthy.status == "confirmed"
 
 
 async def test_a_sweep_needs_no_explorer_at_all(session: AsyncSession):

@@ -124,6 +124,12 @@ def make_settings(**overrides: object) -> Settings:
         "WALLET_ADDRESS_USDT_BSC20": EVM_WALLET,
         "ETHERSCAN_API_KEY": "test-key-not-real",
         "TRONSCAN_API_KEY": "test-key-not-real",
+        # Mandatory since H5, and validated: the secret must not be blank and
+        # the URL must carry a scheme. ``.invalid`` is a reserved TLD that
+        # resolves nowhere, so a request that escaped the trap fails rather
+        # than reaching something real.
+        "PRODUCT_WEBHOOK_URL": "http://product.invalid/webhooks/payments",
+        "PAYMENTS_WEBHOOK_SECRET": "test-secret-not-real",
     }
     values.update(overrides)
     return Settings(**values)  # type: ignore[arg-type]
