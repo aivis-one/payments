@@ -1,3 +1,19 @@
+name: payments
+# The compose PROJECT name, declared rather than inferred.
+#
+# Unset, compose derives it from the directory holding this file, which is an
+# accident of the checkout layout: two stacks whose files both sit in `deploy/`
+# resolve to ONE project, and one whose file sits in a repository root becomes
+# `repo`. Same project means one label namespace -- `ps` from either directory
+# lists the other's containers, every `up -d` reports the other's as orphans,
+# and `down --remove-orphans` from either destroys the other.
+#
+# CONVENTION for every service on these servers: declare it here, first line,
+# equal to the service name. A stack that does not is one directory rename away
+# from colliding with a stack it has never heard of.
+#
+# Nothing observes this except a live docker daemon, so no test covers it.
+
 # =============================================================================
 # PAYMENTS -- Docker Compose (deploy/)
 # =============================================================================
@@ -112,4 +128,9 @@ networks:
     external: true
 
 volumes:
+  # Physical names pinned, so that they do NOT carry the project name as a
+  # prefix. Unpinned, `payments_postgres_data` under project `payments` would land on disk as
+  # `payments_payments_postgres_data` -- the service name twice -- and would move again the day
+  # the project name did. Pinned, the name on disk is the name written here.
   payments_postgres_data:
+    name: payments_postgres_data
