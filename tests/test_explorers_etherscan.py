@@ -218,14 +218,24 @@ async def test_a_null_result_is_the_only_shape_that_means_not_indexed():
     assert result.verdict is Verdict.NOT_FOUND
 
 
-async def test_the_rate_limit_envelope_is_an_api_error_despite_its_200():
+@pytest.mark.parametrize(
+    "fixture", ["etherscan_notok_rate_limit", "etherscan_notok_invalid_key"]
+)
+async def test_the_notok_envelope_is_an_api_error_despite_its_200(fixture: str):
     """Etherscan's own envelope, on a URL that otherwise speaks JSON-RPC.
 
     Reading this as ``not_found`` would spend a user attempt on our throttling.
     It arrives with HTTP 200, so nothing but the body distinguishes it.
+
+    TWO texts, one shape. The capture (P-28) confirmed the envelope and
+    corrected the wording of the rate-limit one, and added the second: an
+    invalid key answers in exactly the same form. The parametrisation says out
+    loud what the adapter relies on -- the presence of a top-level ``status``,
+    never the text -- so a third wording would need no code and no test.
     """
-    payload = load("etherscan_notok_rate_limit")
+    payload = load(fixture)
     assert payload["status"] == "0"
+    assert payload["message"] == "NOTOK"
 
     result, _ = await ask(json_response(payload))
 

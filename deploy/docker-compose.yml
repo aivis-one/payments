@@ -1,0 +1,115 @@
+# =============================================================================
+# PAYMENTS -- Docker Compose (deploy/)
+# =============================================================================
+#
+# The payments stack as its OWN compose project, sitting NEXT TO the product
+# stack on one VPS (TOR section 9): dedicated containers, nothing shared with
+# the product except the external docker network "aivis-shared".
+#
+# THREE services, TWO of them from the ONE root Dockerfile (same image,
+# different commands):
+#   payments-app       -- uvicorn API; the ONLY migrator (alembic runs before
+#                         uvicorn, so "app is healthy" implies "schema is
+#                         migrated");
+#   payments-worker    -- the background process: confirmations, sweeper and
+#                         webhook delivery, three phases in one loop
+#                         (python -m app.worker);
+#   payments-postgres  -- dedicated database (never the product's).
+#
+# NO REDIS, and that is a decision rather than an omission: the outbox of TOR
+# section 8 lives in Postgres, in the same transaction as the status change it
+# describes. A stream would add a second store that the transaction cannot
+# reach, which is the property the outbox exists to have.
+#
+# INTERNAL SERVICE: payments-app publishes NO host port and gets no nginx
+# route. The only way in is over "aivis-shared" from the product backend,
+# presenting the shared service token.
+#
+# The network is EXTERNAL: created once, idempotently, by
+# `payments-deploy.sh install`; the product stack joins the same network on
+# its side, and either may win the race.
+#
+# Environment comes from ./.env (a symlink to /opt/payments/.env, written by
+# `install`, never committed).
+#
+# Usage (via the CLI next to this file):
+#   payments-deploy.sh install | update | start | stop | restart | logs | db |
+#                      status
+# =============================================================================
+
+services:
+  payments-app:
+    build:
+      context: ..
+    container_name: payments-app
+    env_file:
+      - ./.env
+    # The ONLY migrator: schema first, then the server. `exec` hands PID 1 to
+    # uvicorn (clean signal handling). The worker gates on this container's
+    # health, so it never races the migration and never runs alembic itself.
+    command: >
+      sh -c "alembic upgrade head
+      && exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+      --workers 2 --proxy-headers"
+    # NO ports: section -- internal by design. Port 8000 is reachable only
+    # inside "aivis-shared" as http://payments-app:8000.
+    depends_on:
+      payments-postgres: { condition: service_healthy }
+    healthcheck:
+      # /ready answers 503 while the database is unreachable; the probe runs
+      # in-container, which is the only option without a published port.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - aivis-shared
+
+  payments-worker:
+    build:
+      context: ..
+    container_name: payments-worker
+    env_file:
+      - ./.env
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      # Healthy app == migration done.
+      payments-app: { condition: service_healthy }
+    healthcheck:
+      # Single-process container: the meaningful liveness signal is "PID 1 is
+      # the worker". No pgrep in the slim image, so read procfs directly.
+      test: ["CMD-SHELL", "grep -q app.worker /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - aivis-shared
+
+  payments-postgres:
+    image: postgres:16
+    container_name: payments-postgres
+    env_file:
+      - ./.env
+    # NO published port: nothing on the host needs it; the CLI's `db`
+    # subcommand goes through `docker compose exec`.
+    volumes:
+      - payments_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - aivis-shared
+
+networks:
+  aivis-shared:
+    external: true
+
+volumes:
+  payments_postgres_data:

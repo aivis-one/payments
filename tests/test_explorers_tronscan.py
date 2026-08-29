@@ -340,3 +340,50 @@ async def test_a_blank_wallet_address_is_refused_per_call(wallet: str):
             await adapter.lookup(TRON_TXID, wallet)
 
     assert transport.calls == 0
+
+
+# --------------------------------------------------------------------------
+# P-28: the field the live capture brought, and the trap in it
+# --------------------------------------------------------------------------
+
+
+async def test_the_top_level_to_address_is_the_contract_and_is_not_read():
+    """The one trap the live TronScan response carries.
+
+    A real ``transaction-info`` answer has ``toAddress`` at the TOP LEVEL, and
+    it holds the address of the **contract** -- for a TRC20 transfer the
+    transaction is addressed to the token, and the recipient exists only inside
+    ``trc20TransferInfo[].to_address``. An adapter that reached for the obvious
+    top-level field would return ``wrong_address`` for every genuine payment
+    this service will ever see.
+
+    The field was absent from the reconstruction, so nothing here could have
+    gone wrong; it arrived with the capture, and it is asserted rather than
+    merely stored, because a trap that is present in the data and absent from
+    the tests is a trap waiting for the next reader.
+    """
+    payload = load("tronscan_usdt_single")
+    assert payload["toAddress"] == USDT_TRC20
+    assert payload["toAddress"] != payload["trc20TransferInfo"][0]["to_address"]
+
+    result, _ = await ask(json_response(payload))
+
+    assert result.verdict is Verdict.MATCHED
+
+
+async def test_the_capture_fields_do_not_disturb_the_verdict():
+    """The rest of the live shape -- twenty-odd fields the adapter ignores.
+
+    Stated once, so that the merge of the capture into this fixture is covered
+    by something more than the tests that happened to already exist.
+    """
+    payload = load("tronscan_usdt_single")
+    for field in ("contract_map", "contractInfo", "trigger_info", "tokenTransferInfo",
+                  "transfersAllList", "srConfirmList", "normalAddressInfo", "contractData"):
+        assert field in payload
+
+    result, _ = await ask(json_response(payload))
+
+    assert result.verdict is Verdict.MATCHED
+    assert result.raw_amount == int(payload["trc20TransferInfo"][0]["amount_str"])
+    assert result.from_address == payload["trc20TransferInfo"][0]["from_address"]

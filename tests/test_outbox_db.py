@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import explorer_client, settings_dependency
 from app.db import get_session
@@ -652,3 +652,61 @@ async def test_nothing_due_is_not_an_error(session: AsyncSession):
     assert taken == 0
     total = await session.scalar(select(func.count()).select_from(OutboxEvent))
     assert total == 0
+
+
+# ==========================================================================
+# Two real delivery loops -- the hole named in the H5 report
+# ==========================================================================
+
+
+async def test_two_delivery_loops_send_one_event_once(engine) -> None:
+    """The claim H5 asserted about the design and did not test.
+
+    H5 proved the claim in halves: that a second claim finds nothing, and that
+    an expired lease brings a row back. Both ran sequentially in ONE session,
+    which demonstrates the predicate and the lease but not the arbitration --
+    two coroutines on one session serialise on it and race nothing.
+
+    Here each loop gets its own session, as two processes would. The contract
+    is narrow and worth stating exactly: the product receives the event ONCE,
+    and the row ends ``delivered`` with a single spent attempt. At-least-once
+    permits a duplicate after a crash; it does not excuse one produced merely
+    by running two loops at the same time.
+
+    A shared transport records both loops' requests, so a second POST cannot
+    hide in the other client's history.
+
+    What this cannot force is an overlap: the scheduler may run the two loops
+    end to end, and then the second finds nothing because the row is already
+    ``delivered`` rather than because it was locked. The assertion holds either
+    way, and ``claims == 1`` is the part that distinguishes them -- a loop that
+    took the row and then discovered it was already sent would have raised it.
+    """
+    from asyncio import gather
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as setup:
+        event = await published(setup)
+        event_id = event.id
+
+    transport = WebhookTransport(httpx.Response(200))
+    conf = settings()
+
+    async def loop() -> int:
+        async with factory() as own, httpx.AsyncClient(transport=transport) as client:
+            return await deliver_once(own, conf, client)
+
+    taken = await gather(loop(), loop())
+
+    async with factory() as check:
+        row = await check.get(OutboxEvent, event_id)
+        assert row is not None
+        assert row.delivery_state == "delivered"
+        assert row.attempts == 1
+        # Claimed once: the loser's claim matched no rows at all, rather than
+        # taking the row and finding it already sent.
+        assert row.claims == 1
+
+    assert transport.calls == 1
+    assert sorted(taken) == [0, 1]

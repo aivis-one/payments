@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import explorer_client, settings_dependency
@@ -464,3 +465,73 @@ async def test_no_transaction_is_open_while_the_explorer_is_being_called(
     await session.refresh(invoice)
     assert invoice.status == "awaiting_confirmations"
     assert invoice.attempts_used == 1
+
+
+# ==========================================================================
+# The readiness probe (P-17: the deploy contract has nothing to wait for
+# without it)
+# ==========================================================================
+
+
+async def test_ready_answers_200_when_the_database_answers(session: AsyncSession) -> None:
+    """The probe the container healthcheck and the installer both read.
+
+    It runs a query rather than checking a connection: a pool hands out
+    connections to a database that has stopped answering. And because the
+    container runs `alembic upgrade head` before uvicorn, "healthy" carries a
+    second meaning the installer relies on -- the schema is migrated.
+    """
+    app.dependency_overrides[get_session] = lambda: session
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as http:
+        response = await http.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"ready": True}
+
+
+async def test_ready_needs_no_credential(session: AsyncSession) -> None:
+    """Deliberately outside the router's bearer token.
+
+    A probe that needs a credential is a probe docker cannot run. The request
+    below carries no Authorization header at all -- every other route in this
+    service answers 401 to that.
+    """
+    app.dependency_overrides[get_session] = lambda: session
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as http:
+        unauthenticated = await http.get("/ready")
+        guarded = await http.get(f"/api/v1/invoices/{uuid.uuid4()}")
+
+    assert unauthenticated.status_code == 200
+    assert guarded.status_code == 401
+
+
+async def test_ready_answers_503_when_the_database_does_not(session: AsyncSession) -> None:
+    """Down is 503, and it says nothing else.
+
+    No version, no database name, no text of the error -- the service is
+    internal today, but "internal" is a property of this deployment rather than
+    of the handler, and a probe is the endpoint a future reverse proxy is most
+    tempted to expose. The reason goes to the container log, which is where the
+    installer now prints from on failure.
+    """
+
+    class Refusing:
+        async def execute(self, *_args: object, **_kw: object) -> object:
+            raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    app.dependency_overrides[get_session] = lambda: Refusing()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as http:
+        response = await http.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"ready": False}
+    assert "connection refused" not in response.text

@@ -28,7 +28,119 @@
       "tokenType": "trc20",
       "amount_str": "100000000",
       "status": 0,
-      "from_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+      "from_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7",
+      "tokenType2": "trc20",
+      "usdValue": {
+        "current": {
+          "amountInUsd": "100.00734826",
+          "priceInUsd": "1.0000734826529343"
+        },
+        "history": {
+          "amountInUsd": "99.99772740",
+          "priceInUsd": "0.9999772740212698"
+        }
+      }
     }
-  ]
+  ],
+  "contract_map": {
+    "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t": true,
+    "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX": false,
+    "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7": false
+  },
+  "contractInfo": {
+    "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t": {
+      "isToken": true,
+      "tag1": "USDT Token",
+      "tag1Url_level": 1,
+      "tag1Url": "https://tron.network/usdt",
+      "name": "TetherToken",
+      "risk": false,
+      "publicTagDesc": "",
+      "vip": true,
+      "publicTag": "USDT Token"
+    }
+  },
+  "data": "",
+  "event_count": 1,
+  "project": "Tether",
+  "toAddress": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+  "triggerContractType": 500,
+  "riskTransaction": false,
+  "info": {},
+  "normalAddressInfo": {
+    "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t": {
+      "risk": false
+    },
+    "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX": {
+      "risk": false
+    },
+    "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7": {
+      "risk": false
+    }
+  },
+  "noteLevel": 2,
+  "addressTag": {},
+  "fee_limit": 100000000,
+  "contract_type": "trc20",
+  "hashTag": [],
+  "internal_transactions": {},
+  "signature_addresses": [],
+  "srConfirmList": [
+    {
+      "address": "TH7Fe1W8CcLeqN4LGfqX1R9EpsnrJBQJij",
+      "name": "P2P.ORG",
+      "block": 49963474,
+      "url": "https://p2p.org",
+      "url_level": 0
+    },
+    {
+      "address": "TTcYhypP8m4phDhN6oRexz2174zAerjEWP",
+      "name": "CryptoGuyInZA",
+      "block": 49963475,
+      "url": "",
+      "url_level": 0
+    }
+  ],
+  "transfersAllList": [
+    {
+      "symbol": "USDT",
+      "to_address": "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX",
+      "contract_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      "type": "Transfer",
+      "decimals": 6,
+      "name": "Tether USD",
+      "tokenType": "trc20",
+      "amount_str": "100000000",
+      "status": 0,
+      "from_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7",
+      "tokenType2": "trc20"
+    }
+  ],
+  "tokenTransferInfo": {
+    "symbol": "USDT",
+    "to_address": "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX",
+    "contract_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+    "type": "Transfer",
+    "decimals": 6,
+    "name": "Tether USD",
+    "tokenType": "trc20",
+    "amount_str": "100000000",
+    "status": 0,
+    "from_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+  },
+  "trigger_info": {
+    "method": "transfer(address _to,uint256 _value)",
+    "parameter": {
+      "_value": "100000000",
+      "_to": "TWbdVwjHTNn2PXDPbtSNvvESDd8PpApFmX"
+    },
+    "methodId": "a9059cbb",
+    "contract_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+    "call_value": 0
+  },
+  "contractData": {
+    "data": "a9059cbb0000000000000000000000000000000000000000000000000000000005f5e100",
+    "owner_address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7",
+    "contract_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+  }
 }
