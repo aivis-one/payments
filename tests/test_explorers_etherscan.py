@@ -227,11 +227,13 @@ async def test_the_notok_envelope_is_an_api_error_despite_its_200(fixture: str):
     Reading this as ``not_found`` would spend a user attempt on our throttling.
     It arrives with HTTP 200, so nothing but the body distinguishes it.
 
-    TWO texts, one shape. The capture (P-28) confirmed the envelope and
-    corrected the wording of the rate-limit one, and added the second: an
-    invalid key answers in exactly the same form. The parametrisation says out
-    loud what the adapter relies on -- the presence of a top-level ``status``,
-    never the text -- so a third wording would need no code and no test.
+    TWO texts, one shape, and only one of the texts was ever observed. The
+    capture (P-28) was taken with an invalid key, so that envelope and its
+    wording are confirmed; the rate-limit wording next to it is still
+    reconstruction, because nobody provoked a rate limit. The parametrisation
+    says out loud what the adapter relies on -- the presence of a top-level
+    ``status``, never the text -- which is exactly why one unobserved wording
+    costs nothing.
     """
     payload = load(fixture)
     assert payload["status"] == "0"

@@ -24,8 +24,8 @@ nothing.
 | `tronscan_usdt_single.json` | Live shape merged in: `contract_map`, `contractInfo`, `trigger_info`, `tokenTransferInfo`, `transfersAllList`, `srConfirmList`, `normalAddressInfo`, `contractData`, `toAddress` and a dozen more. |
 | `etherscan_erc20_single.json` | Live shape confirmed; `blockTimestamp` added to the log entry, which the reconstruction lacked. |
 | `etherscan_block_number.json` | Live shape confirmed. |
-| `etherscan_notok_rate_limit.json` | Envelope confirmed, **text corrected** -- the reconstruction had invented wording. |
-| `etherscan_notok_invalid_key.json` | New. The same envelope with the text a rejected key really produces. |
+| `etherscan_notok_invalid_key.json` | New, and the only NOTOK text ever observed: the capture was taken with an invalid key. |
+| `etherscan_notok_rate_limit.json` | **Unchanged, and its text is still reconstruction.** The envelope around it is confirmed; the wording of the rate-limit message was never seen, because nobody provoked a rate limit. |
 | Everything else -- `split`, `mixed`, `foreign_only`, `wrong_recipient`, `reverted`, `trx_transfer`, `no_transfer_info`, `approval_only`, `jsonrpc_error`, `result_null`, `no_logs`, `bsc20_single` | **Still reconstruction.** Derived from the confirmed envelopes, but no such response was ever observed. |
 
 That last row is the point of this table. What was confirmed is the base form,
@@ -43,6 +43,13 @@ every genuine payment. It is now present in the fixture and asserted in
 
 **`trc20TransferInfo` is an array, `amount_str` is a string, `confirmations` is
 a top-level integer.** All three as reconstructed.
+
+**The NOTOK envelope is real, and only one of its two texts is.** Etherscan
+answers an invalid key with HTTP 200 and its own `status`/`message`/`result`
+envelope rather than JSON-RPC, which is what the adapter keys on. The
+rate-limit wording sitting in the other file was never observed and stays a
+reconstruction; the parametrised test asserts the presence of a top-level
+`status` and never the text, so a third wording would need no change here.
 
 **Etherscan emits the issuing contract in lower case** while the config carries
 the EIP-55 checksummed form. The case trap is real: a literal comparison would
